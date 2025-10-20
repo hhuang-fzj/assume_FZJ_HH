@@ -70,51 +70,124 @@ class InfrastructureInterface:
         self.setup()
 
     def setup(self):
+        # 1) PLZ → NUTS lookup (unchanged)
         with self.databases["nuts"].connect() as conn:
             self.plz_nuts = pd.read_sql_query(
-                "select code, nuts1, nuts2, nuts3, longitude, latitude from plz",
+                'SELECT code, nuts1, nuts2, nuts3, longitude, latitude FROM plz',
                 conn,
                 index_col="code",
             )
 
-        query = 'select kw."Id", "Wert", "Name" from "Katalogwerte" kw join "Katalogkategorien" kk on kw."KatalogKategorieId"=kk."Id"'
+        # ===== Helper: safe read_sql that returns empty DF on missing table/column =====
+        def _try_sql(sql, conn, label="query"):
+            try:
+                return pd.read_sql_query(sql, conn)
+            except Exception as e:
+                print(f"\n[setup] ⚠️ SQL query failed for {label}: {e}")
+                print(f"[setup] SQL that failed:\n{sql}\n")
+                return pd.DataFrame()
+
+        # 2) Fuels (Energieträger)  ----------------------------------------------------
+        # Collect distinct fuels from available MaStR tables (German column names).
         with self.databases["mastr"].connect() as conn:
-            katalogwerte = pd.read_sql_query(query, conn, index_col="Id")
+            fuels_comb = _try_sql(
+                'SELECT DISTINCT "Energietraeger" AS fuel FROM mastr.combustion_extended',
+                conn,
+            )
+            fuels_nuc = _try_sql(
+                "SELECT DISTINCT 'Kernenergie' AS fuel FROM mastr.nuclear_extended",
+                conn,
+            )
+            fuels_bio = _try_sql(
+                "SELECT DISTINCT 'Biomasse' AS fuel FROM mastr.biomass_extended",
+                conn,
+            )
+            fuels_hyd = _try_sql(
+                "SELECT DISTINCT 'Wasserkraft' AS fuel FROM mastr.hydro_extended",
+                conn,
+            )
 
-        energietraeger = katalogwerte[
-            katalogwerte["Name"].str.contains("Energieträger")
-        ]
-        del energietraeger["Name"]
-        energietraeger = energietraeger.to_dict()["Wert"]
+        fuels_df = pd.concat([fuels_comb, fuels_nuc, fuels_bio, fuels_hyd], ignore_index=True)
+        fuels_df = fuels_df.dropna().drop_duplicates().sort_values(by="fuel")
 
-        self.energietraeger_translated = {
-            fuel_translation.get(y, "unknown"): x for x, y in energietraeger.items()
+        # Provide both directions if you need EN↔DE later.
+        # Adjust/extend mapping to your project’s canonical English names.
+        de_to_en = {
+            "Steinkohle": "hard coal",
+            "Braunkohle": "lignite",
+            "Erdgas": "gas",
+            "Mineralölprodukte": "oil",
+            "Biomasse": "biomass",
+            "Kernenergie": "nuclear",
+            "Wasserkraft": "hydro",
+        }
+        en_to_de = {v: k for k, v in de_to_en.items()}
+
+        # Keep the attribute name used elsewhere in your codebase.
+        # If your downstream expects EN keys, it’s handy to expose both:
+        self.energietraeger_translated = {  # EN -> DE (canonical)
+            en: de for en, de in en_to_de.items()
+            if de in set(fuels_df["fuel"])
+        }
+        self.energietraeger_translated_de_to_en = {  # DE -> EN (convenience)
+            de: de_to_en.get(de, "unknown") for de in fuels_df["fuel"]
         }
 
-        verbrennungsanlagen = katalogwerte[
-            katalogwerte["Name"] == "TechnologieVerbrennungsanlagen"
-        ]
-        kernkraft = katalogwerte[katalogwerte["Name"] == "TechnologieKernkraft"]
-        verbrennungsanlagen = pd.concat([verbrennungsanlagen, kernkraft])
-        del verbrennungsanlagen["Name"]
-        self.mastr_generation_codes = verbrennungsanlagen.to_dict()["Wert"]
-        # solarlage = katalogwerte[katalogwerte["Name"] == "SolarLage"]
+        # 3) Thermal technology “codes” (Technologie) ----------------------------------
+        # Old code built self.mastr_generation_codes from catalog tables.
+        # Now: take distinct German technology names present in combustion/nuclear.
+        with self.databases["mastr"].connect() as conn:
+            tech_comb = _try_sql(
+                'SELECT DISTINCT LOWER("Technologie") AS key, "Technologie" AS value '
+                'FROM mastr.combustion_extended WHERE "Technologie" IS NOT NULL',
+                conn,
+            )
+            # Nuclear may not have a granular Technologie; expose a stable label:
+            tech_nuc = pd.DataFrame([{"key": "kernenergie", "value": "Kernenergie"}])
 
-        windlage = katalogwerte[katalogwerte["Name"] == "WindLage"]
-        del windlage["Name"]
-        windlage = windlage.to_dict()["Wert"]
-        windlage_translation = {
-            "Windkraft an Land": "on_shore",
-            "Windkraft auf See": "off_shore",
-        }
+        tech_df = pd.concat([tech_comb, tech_nuc], ignore_index=True).drop_duplicates()
+        self.mastr_generation_codes = dict(zip(tech_df["key"], tech_df["value"]))
 
-        self.mastr_wind_type = {
-            windlage_translation.get(y, "unknown"): x for x, y in windlage.items()
-        }
+        # 4) Wind: onshore/offshore flag + manufacturers -------------------------------
+        # Derive on/offshore from a detail field if present; fall back to heuristics.
+        with self.databases["mastr"].connect() as conn:
+            wind = _try_sql(
+                'SELECT DISTINCT '
+                '  "Hersteller"            AS hersteller, '
+                '  "Technologie"           AS tech_detail, '
+                '  "WindAnLandOderAufSee"  AS lage '
+                'FROM mastr.wind_extend',  # <-- note: wind_extend (no "ed")
+                conn,
+                label="wind_extend",
+            )
 
-        windhersteller = katalogwerte[katalogwerte["Name"] == "WindHersteller"]
-        del windhersteller["Name"]
-        self.windhersteller = windhersteller.to_dict()["Wert"]
+        def _lage_to_flag(s: str) -> str:
+            if not s:
+                return "on_shore"  # default
+            s = s.strip().lower()
+            if "auf see" in s or "offshore" in s:
+                return "off_shore"
+            return "on_shore"
+
+        if not wind.empty and {"lage", "hersteller"}.issubset(wind.columns):
+            wind["shore_flag"] = wind["lage"].astype(str).map(_lage_to_flag)
+            self.mastr_wind_type = {"on_shore": "on_shore", "off_shore": "off_shore"}
+
+            manufs = (
+                wind["hersteller"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .replace({"": None, "nan": None, "None": None})
+                .dropna()
+                .drop_duplicates()
+                .sort_values()
+                .tolist()
+            )
+            self.windhersteller = {m: m for m in manufs}
+        else:
+            self.mastr_wind_type = {"on_shore": "on_shore", "off_shore": "off_shore"}
+            self.windhersteller = {}
 
     def get_lat_lon(self, plz):
         if not isinstance(plz, int):
