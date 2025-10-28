@@ -47,10 +47,10 @@ class InfrastructureInterface:
         db_server_uri,
         structure_databases=(
             "mastr",
-            "oep",
-            "windmodel",
+            "oep",#fixme: No crawler
+            "windmodel",#fixme:Currently not used
             "nuts",
-            "scigrid",
+            "scigrid",#fixme: Currently not used
             "weather",
             "opec",
             "instrat_pl",
@@ -112,15 +112,7 @@ class InfrastructureInterface:
 
         # Provide both directions if you need EN↔DE later.
         # Adjust/extend mapping to your project’s canonical English names.
-        de_to_en = {
-            "Steinkohle": "hard coal",
-            "Braunkohle": "lignite",
-            "Erdgas": "gas",
-            "Mineralölprodukte": "oil",
-            "Biomasse": "biomass",
-            "Kernenergie": "nuclear",
-            "Wasserkraft": "hydro",
-        }
+        de_to_en = fuel_translation
         en_to_de = {v: k for k, v in de_to_en.items()}
 
         # Keep the attribute name used elsewhere in your codebase.
@@ -154,25 +146,14 @@ class InfrastructureInterface:
             wind = _try_sql(
                 'SELECT DISTINCT '
                 '  "Hersteller"            AS hersteller, '
-                '  "Technologie"           AS tech_detail, '
                 '  "WindAnLandOderAufSee"  AS lage '
-                'FROM mastr.wind_extend',  # <-- note: wind_extend (no "ed")
+                'FROM mastr.wind_extended',  # <-- note: wind_extended
                 conn,
                 label="wind_extend",
             )
-
-        def _lage_to_flag(s: str) -> str:
-            if not s:
-                return "on_shore"  # default
-            s = s.strip().lower()
-            if "auf see" in s or "offshore" in s:
-                return "off_shore"
-            return "on_shore"
+            self.mastr_wind_type = {"on_shore": "Windkraft an Land", "off_shore": "Windkraft auf See"}
 
         if not wind.empty and {"lage", "hersteller"}.issubset(wind.columns):
-            wind["shore_flag"] = wind["lage"].astype(str).map(_lage_to_flag)
-            self.mastr_wind_type = {"on_shore": "on_shore", "off_shore": "off_shore"}
-
             manufs = (
                 wind["hersteller"]
                 .dropna()
@@ -186,8 +167,8 @@ class InfrastructureInterface:
             )
             self.windhersteller = {m: m for m in manufs}
         else:
-            self.mastr_wind_type = {"on_shore": "on_shore", "off_shore": "off_shore"}
             self.windhersteller = {}
+            logging.warning("No wind data found in 'wind_extended'.")
 
     def get_lat_lon(self, plz):
         if not isinstance(plz, int):
@@ -312,7 +293,7 @@ class InfrastructureInterface:
                 raise Exception("invalid plz code")
 
         latitude, longitude = self.get_lat_lon_area(area)
-
+        #Fixme: Technologie/TurbineTyp in combustion_extended & nuclear_extended are different
         query = f"""
             SELECT ev."EinheitMastrNummer" as "unitID",
             ev."Energietraeger" as "fuel",
@@ -321,7 +302,7 @@ class InfrastructureInterface:
             COALESCE(ev."Inbetriebnahmedatum", '2010-01-01') as "startDate",
             COALESCE(ev."DatumEndgueltigeStilllegung", '2050-01-01') as "endDate",
             ev."Nettonennleistung" as "maxPower",
-            COALESCE(ev."Technologie", 839) as "turbineTyp",
+            COALESCE(ev."Technologie", \'Dampfmotor\') as "turbineTyp",
             ev."GenMastrNummer" as "generatorID"
             """
         plz_codes_str = "', '".join([str(x) for x in plz_codes])
@@ -332,15 +313,15 @@ class InfrastructureInterface:
                 kwk."ThermischeNutzleistung" as "kwkPowerTherm",
                 kwk."ElektrischeKwkLeistung" as "kwkPowerElec",
                 ev."AnlageIstImKombibetrieb" as "combination"
-                FROM "EinheitenVerbrennung" ev
-                LEFT JOIN "AnlagenKwk" kwk ON kwk."KwkMastrNummer" = ev."KwkMastrNummer"
+                FROM "combustion_extended" ev
+                LEFT JOIN "kwk" kwk ON kwk."KwkMastrNummer" = ev."KwkMastrNummer"
                 WHERE ev."Postleitzahl" in {plz_codes_str}
-                AND ev."Energietraeger" = {self.energietraeger_translated[fuel_type]}
-                AND ev."Nettonennleistung" > 5000 AND ev."EinheitBetriebsstatus" >= 35
+                AND ev."Energietraeger" = \'{self.energietraeger_translated[fuel_type]}\'
+                AND ev."Nettonennleistung" > 5000 AND ev."EinheitBetriebsstatus" = 'In Betrieb'
                 """
         else:
             query += f"""
-                FROM "EinheitenKernkraft" ev
+                FROM "nuclear_extended" ev
                 WHERE ev."Postleitzahl" in {plz_codes_str}
                 """
         if created_before:
@@ -420,17 +401,17 @@ class InfrastructureInterface:
             f'"Nettonennleistung" as "maxPower", '
             f'COALESCE("Laengengrad", {longitude}) as "lon", '
             f'COALESCE("Breitengrad", {latitude}) as "lat", '
-            f'COALESCE("Hauptausrichtung", 699) as "azimuthCode", '
+            f'COALESCE("Hauptausrichtung", \'Süd\') as "azimuthCode", '
             f'"Leistungsbegrenzung" as "limited", '
             f'"Einspeisungsart" as "ownConsumption", '
-            f'COALESCE("HauptausrichtungNeigungswinkel", 809) as "tiltCode", '
+            f'COALESCE("HauptausrichtungNeigungswinkel", \'21 - 40 Grad\') as "tiltCode", '
             f'COALESCE("Inbetriebnahmedatum", \'2018-01-01\') as "startDate",'
             f'"InanspruchnahmeZahlungNachEeg" as "eeg" '
-            f'FROM "EinheitenSolar" '
-            f'INNER JOIN "AnlagenEegSolar" ON "EinheitMastrNummer" = "VerknuepfteEinheitenMastrNummern" '
+            f'FROM "solar_extended" '
+            f'INNER JOIN "solar_eeg" ON "EinheitMastrNummer" = "VerknuepfteEinheit" '
             f'WHERE "Postleitzahl" in {plz_codes_str} '
-            f'AND "Lage" = {mastr_solar_codes[solar_type]} '
-            f'AND "EinheitBetriebsstatus" >= 35 '
+            f'AND "ArtDerSolaranlage" = \'{mastr_solar_codes[solar_type]}\' '
+            f'AND "EinheitBetriebsstatus" = \'In Betrieb\' '
         )
 
         if created_before:
@@ -449,12 +430,12 @@ class InfrastructureInterface:
         df["startDate"] = pd.to_datetime(df["startDate"])
         # all PVs with nan are south oriented assets
         df["azimuth"] = [
-            mastr_solar_azimuth[str(code)] for code in df["azimuthCode"].to_numpy(int)
+            mastr_solar_azimuth[str(code)] for code in df["azimuthCode"]
         ]
         del df["azimuthCode"]
         # all PVs with nan have a tilt angle of 30°
         df["tilt"] = [
-            mastr_solar_azimuth[str(code)] for code in df["tiltCode"].to_numpy(int)
+            mastr_solar_azimuth[str(code)] for code in df["tiltCode"]
         ]
         del df["tiltCode"]
         if solar_type == "roof_top":
@@ -488,18 +469,18 @@ class InfrastructureInterface:
                 all([missing_values[i], deadline[i], power_cap[i]])
                 for i in range(len(missing_values))
             ]
-            df.loc[limited, "limited"] = 803
+            df.loc[limited, "limited"] = str("Ja, auf 70%")
             # rest nans have no limitation
-            df["limited"] = df["limited"].fillna(802)
+            df["limited"] = df["limited"].fillna("Nein")
             df["limited"] = [
-                mastr_solar_azimuth[str(code)] for code in df["limited"].to_numpy(int)
+                mastr_solar_azimuth[str(code)] for code in df["limited"]
             ]
         if solar_type == "free_area" or solar_type == "other":
             # TODO: Check restrictions for solar power plant
             # nans have no limitation
-            df["limited"] = df["limited"].fillna(802)
+            df["limited"] = df["limited"].fillna("Nein")
             df["limited"] = [
-                mastr_solar_azimuth[str(code)] for code in df["limited"].to_numpy(int)
+                mastr_solar_azimuth[str(code)] for code in df["limited"]
             ]
         # all PVs with nan and startDate > 2016 and maxPower > 100 kWp have direct marketing
         missing_values = df["eeg"].isna()
@@ -538,7 +519,7 @@ class InfrastructureInterface:
             f'COALESCE("Laengengrad", {longitude}) as "lon", '
             f'COALESCE("Breitengrad", {latitude}) as "lat", '
             f'"Typenbezeichnung" as "typ", '
-            f'COALESCE("Hersteller", -1) as "manufacturer", '
+            f'COALESCE("Hersteller", \'unknown\') as "manufacturer", '#Note: from int(-1) change to string(unknown), because sql can not handel integer for a string column#fixme: check if postprocessing is handeling int(-1)
             f'"Nabenhoehe" as "height", '
             f'"Rotordurchmesser" as "diameter", '
             f'"ClusterNordsee" as "nordicSea", '
@@ -546,9 +527,9 @@ class InfrastructureInterface:
             f'"GenMastrNummer" as "generatorID", '
             f'COALESCE("Inbetriebnahmedatum", \'2018-01-01\') as "startDate", '
             f'COALESCE("DatumEndgueltigeStilllegung", \'2050-01-01\') as "endDate" '
-            f'FROM "EinheitenWind" '
-            f'WHERE "EinheitBetriebsstatus" >= 35 '
-            f'AND "Lage" = {self.mastr_wind_type[wind_type]} '
+            f'FROM "wind_extended" '
+            f'WHERE "EinheitBetriebsstatus" = \'In Betrieb\' '#fixme: HINT:  No operator matches the given name and argument types. You might need to add explicit type casts.
+            f'AND "WindAnLandOderAufSee" = \'{self.mastr_wind_type[wind_type]}\' '#Note: in current data base Column "Lage" containes only "null
         )
         if wind_type == "on_shore":
             query += f' AND "Postleitzahl" in {plz_codes_str} '
@@ -616,13 +597,13 @@ class InfrastructureInterface:
         query = (
             f'SELECT "EinheitMastrNummer" as "unitID", '
             f'COALESCE("Inbetriebnahmedatum", \'2018-01-01\') as "startDate", '
-            f'COALESCE("DatumEndgueltigeStilllegung", \'2050-01-01\') as "endDate" '
+            f'COALESCE("DatumEndgueltigeStilllegung", \'2050-01-01\') as "endDate", '
             f'"Nettonennleistung" as "maxPower", '
             f'COALESCE("Laengengrad", {longitude}) as "lon", '
             f'COALESCE("Breitengrad", {latitude}) as "lat" '
-            f'FROM "EinheitenBiomasse"'
+            f'FROM "biomass_extended"'
             f'WHERE "Postleitzahl" in {plz_codes_str} AND'
-            f'"EinheitBetriebsstatus" >= 35 '
+            f'"EinheitBetriebsstatus" = \'In Betrieb\' '
         )
 
         if created_before:
@@ -657,13 +638,13 @@ class InfrastructureInterface:
         query = (
             f'SELECT "EinheitMastrNummer" as "unitID", '
             f'COALESCE("Inbetriebnahmedatum", \'2018-01-01\') as "startDate", '
-            'COALESCE("DatumEndgueltigeStilllegung", \'2050-01-01\') as "endDate" '
+            'COALESCE("DatumEndgueltigeStilllegung", \'2050-01-01\') as "endDate", '
             f'"Nettonennleistung" as "maxPower", '
             f'COALESCE("Laengengrad", {longitude}) as "lon", '
             f'COALESCE("Breitengrad", {latitude}) as "lat" '
-            f'FROM "EinheitenWasser" '
+            f'FROM "hydro_extended" '#origin: EinheitenWasser
             f'WHERE "Postleitzahl"::int in {plz_codes_str} AND '
-            f'"EinheitBetriebsstatus" >= 35 AND "ArtDerWasserkraftanlage" = 890 '
+            f'"EinheitBetriebsstatus" = \'In Betrieb\' AND "ArtDerWasserkraftanlage" = \'Laufwasseranlage\''# todo: test if this filter is functioning
         )
 
         if created_before:
@@ -696,20 +677,20 @@ class InfrastructureInterface:
         plz_codes_str = f"('{plz_codes_str}')"
 
         query = (
-            f'SELECT "EinheitMastrNummer" as "unitID", '
-            f'"LokationMastrNummer" as "locationID", '
-            f'"SpeMastrNummer" as "storageID", '
-            f'"NameStromerzeugungseinheit" as "name", '
-            f'COALESCE("Inbetriebnahmedatum", \'2018-01-01\') as "startDate", '
-            f'"Nettonennleistung" as "PMinus_max", '
-            f'"NutzbareSpeicherkapazitaet" as "VMax", '
-            f'"PumpbetriebLeistungsaufnahme" as "PPlus_max", '
-            f'COALESCE("Laengengrad", {longitude}) as "lon", '
-            f'COALESCE("Breitengrad", {latitude}) as "lat" '
-            f'FROM "EinheitenStromSpeicher"'
-            f'LEFT JOIN "AnlagenStromSpeicher" ON "EinheitMastrNummer" = "VerknuepfteEinheitenMastrNummern" '
-            f'WHERE "Postleitzahl"::int in {plz_codes_str} AND '
-            f'"EinheitBetriebsstatus" = 35 AND "Technologie" = 1537 AND "EinheitSystemstatus"=472 AND "Land"=84 '
+            f'SELECT spe."EinheitMastrNummer" as "unitID", '
+            f'spe."LokationMastrNummer" as "locationID", '
+            f'spe."SpeMastrNummer" as "storageID", '
+            f'spe."NameStromerzeugungseinheit" as "name", '
+            f'COALESCE(spe."Inbetriebnahmedatum", \'2018-01-01\') as "startDate", '
+            f'spe."Nettonennleistung" as "PMinus_max", '
+            f'su."NutzbareSpeicherkapazitaet" as "VMax", '
+            f'spe."PumpbetriebLeistungsaufnahme" as "PPlus_max", '
+            f'COALESCE(spe."Laengengrad", {longitude}) as "lon", '
+            f'COALESCE(spe."Breitengrad", {latitude}) as "lat" '
+            f'FROM "storage_extended" spe ' 
+            f'LEFT JOIN "storage_units" su ON spe."EinheitMastrNummer" = su."VerknuepfteEinheit" '
+            f'WHERE spe."Postleitzahl"::int in {plz_codes_str} AND '
+            f'spe."EinheitBetriebsstatus" = \'In Betrieb\' AND spe."Technologie" = \'Pumpspeicher\'  AND spe."EinheitSystemstatus"= \'Aktiviert\' AND spe."Land"= \'Deutschland\' '#Note: all registered unit are activated
             f'AND "Nettonennleistung" > 500'
         )
 
@@ -735,7 +716,7 @@ class InfrastructureInterface:
         df["VMax"] = df["VMax"].fillna(0)
         for index, row in df[df["VMax"] == 0].iterrows():
             # storage_volumes is in [MWh]
-            for key in mastr_storage.keys():
+            for key in mastr_storage.keys():#Todo: Check value Code or String
                 if key in row["name"]:
                     df.at[index, "VMax"] = mastr_storage[key] * 1e3
                     break
@@ -779,7 +760,7 @@ class InfrastructureInterface:
             return self.get_demand_in_area("DEB19")
         query = f"""select sum(sector_consumption_residential) as household, sum(sector_consumption_retail) as business,
                 sum(sector_consumption_industrial) as industry, sum(sector_consumption_agricultural) as agriculture
-                from demand where version='v0.4.5' and nuts LIKE '{area}%%'
+                from demand where version='v0.4.5' and nuts LIKE '{area}%%' 
                 """
         with self.databases["oep"].connect() as conn:
             df = pd.read_sql(query, conn)
@@ -805,22 +786,22 @@ class InfrastructureInterface:
         plz_codes_str = f"('{plz_codes_str}')"
 
         query = (
-            f'SELECT spe."LokationMastrNummer" as "unitID", '
+            f'SELECT spe."LokationMastrNummer" as "unitID", ' 
             f'so."Nettonennleistung" as "maxPower", '
             f'spe."Nettonennleistung" as "batPower", '
             f'COALESCE(so."Laengengrad", {longitude}) as "lon", '
             f'COALESCE(so."Breitengrad", {latitude}) as "lat", '
-            f'COALESCE(so."Hauptausrichtung", 699) as "azimuthCode", '
-            f'COALESCE(so."Leistungsbegrenzung", 802) as "limited", '
-            f'COALESCE(so."Einspeisungsart", 689) as "ownConsumption", '
-            f'COALESCE(so."HauptausrichtungNeigungswinkel", 809) as "tiltCode", '
+            f'COALESCE(so."Hauptausrichtung", \'Süd\') as "azimuthCode", '#Fixme: Default Code 699, integer can not be matched
+            f'COALESCE(so."Leistungsbegrenzung", \'Nein\') as "limited", '#Fixme: Default Code 802, integer can not be matched
+            f'COALESCE(so."Einspeisungsart", \'Teileinspeisung\') as "ownConsumption", '#Fixme: Default Code 689, integer can not be matched
+            f'COALESCE(so."HauptausrichtungNeigungswinkel", \'21 - 40 Grad\') as "tiltCode", '#Fixme: Default Code 809, integer can not be matched
             f'COALESCE(so."Inbetriebnahmedatum", \'2018-01-01\') as "startDate", '
             f'an."NutzbareSpeicherkapazitaet" as "VMax" '
-            f'FROM "EinheitenStromSpeicher" spe '
-            f'INNER JOIN "EinheitenSolar" so ON spe."LokationMastrNummer" = so."LokationMastrNummer" '
-            f'INNER JOIN "AnlagenStromSpeicher" an ON spe."SpeMastrNummer" = an."MastrNummer" '
+            f'FROM "storage_extended" spe '
+            f'INNER JOIN "solar_extended" so ON spe."LokationMastrNummer" = so."LokationMastrNummer" '#Fixme: Old: EinheitenSolar
+            f'INNER JOIN "storage_units" an ON spe."SpeMastrNummer" = an."MastrNummer" '#Fixme: Old: AnlagenStromSpeicher
             f'WHERE so."Postleitzahl" in {plz_codes_str} '
-            f'AND so."EinheitBetriebsstatus" >= 35 '
+            f'AND so."EinheitBetriebsstatus" = \'In Betrieb\' '
         )
 
         if created_before:
@@ -839,18 +820,19 @@ class InfrastructureInterface:
         df["VMax"] = df["VMax"].fillna(10)
         df["ownConsumption"] = df["ownConsumption"].replace(689, 1)
         df["ownConsumption"] = df["ownConsumption"].replace(688, 0)
+        #Fixme: Why is
         df["limited"] = [
-            mastr_solar_azimuth[str(code)] for code in df["limited"].to_numpy(int)
+            mastr_solar_azimuth[str(code)] for code in df["limited"]#Fixme: String Value from Mastr
         ]
 
         # all PVs with nan are south oriented assets
         df["azimuth"] = [
-            mastr_solar_azimuth[str(code)] for code in df["azimuthCode"].to_numpy(int)
+            mastr_solar_azimuth[str(code)] for code in df["azimuthCode"]#Fixme: String Value from Mastr
         ]
         del df["azimuthCode"]
         # all PVs with nan have a tilt angle of 30°
         df["tilt"] = [
-            mastr_solar_azimuth[str(code)] for code in df["tiltCode"].to_numpy(int)
+            mastr_solar_azimuth[str(code)] for code in df["tiltCode"]#Fixme: String Value from Mastr
         ]
         del df["tiltCode"]
         # assumption "regenerative Energiesysteme":
@@ -1127,7 +1109,7 @@ def get_solar_series(solar_systems: pd.DataFrame, weather_df: pd.DataFrame):
         azimuth = int(info[0])
         tilt = int(info[1])
         maxPower = group["maxPower"].sum()  # in kW
-
+        #Todo: Find out how to handel East-West system: "https://pvlib-python.readthedocs.io/en/v0.9.0/auto_examples/plot_mixed_orientation.html"
         if "batPower" in group.columns:
             battery_power += group["batPower"].sum()
         system = PVSystem(
