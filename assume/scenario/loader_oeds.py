@@ -13,7 +13,7 @@ import pandas as pd
 from dateutil import rrule as rr
 
 from assume import World
-from assume.common.fast_pandas import FastSeries
+from assume.common.fast_pandas import FastSeries, FastIndex
 from assume.common.forecasts import NaiveForecast
 from assume.common.market_objects import MarketConfig, MarketProduct
 from assume.scenario.oeds.infrastructure import InfrastructureInterface
@@ -127,6 +127,7 @@ def load_oeds(
         demand = demand.resample("h").mean() / len(nuts_config)
 
     for area in nuts_config:
+        #area = 'DE255'#Fixeme: only for bug shotting
         logger.info(f"loading config {area} for {year}")
         config_path = Path.home() / ".assume" / f"{area}_{year}"
         if not config_path.is_dir():
@@ -329,8 +330,11 @@ def load_oeds(
 
                 availability = 1
                 if plant["endDate"] < end:
-                    availability = FastSeries(index, 1)
-                    availability[availability.index > end] = 0
+                    #Fixme: Temporal convert index and end here to fast_pandas so they can be processed here
+                    index = FastIndex(start=start, end=end)#Note: defualt time resolution 1h
+
+                    availability = FastSeries(index, 1)#Fixme: the origin version defines index as pd.DatetimeIndex at beginning of the function loader_oeds(), where should it be converted into FastIndex?
+                    #availability[availability.index > end] = 0#Fixme: Index is define from start to end, so why whould their be any datetime beyond end?
 
                 world.add_unit(
                     f"conventional{area}_{fuel_type}_{i}",
@@ -382,7 +386,7 @@ if __name__ == "__main__":
     else:
         study_case = f"custom_{type}_{year}"
     start = datetime(year, 1, 1)
-    end = datetime(year, 12, 31) - timedelta(hours=1)
+    end = datetime(year, 12, 31) - timedelta(hours=2)#Demand_data only has 8759 da
     marketdesign = [
         MarketConfig(
             "EOM",

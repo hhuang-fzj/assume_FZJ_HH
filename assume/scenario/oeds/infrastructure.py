@@ -58,6 +58,7 @@ class InfrastructureInterface:
         ),
     ):
         self.databases = {}
+        self._last_weather_area = None #To fix missing data problem of weather data in nuts area, by note the last working area
         for db in structure_databases:
             schema_name = db
             if db == "nuts":
@@ -246,6 +247,8 @@ class InfrastructureInterface:
 
         df["startDate"] = df["startDate"].fillna(pd.to_datetime("2005-05-05"))
         df["startDate"] = pd.to_datetime(df["startDate"])
+        df["endDate"] = df["endDate"].fillna(pd.to_datetime("2050-01-01"))
+        df["endDate"] = pd.to_datetime(df["endDate"])#Fixme: Why is the endDate not converted in the first version?
         if "combination" in df.columns:  # if no combination flag is set, set it to 0
             # 0 if None, else 1
             df["combination"] = df["combination"].notna().astype(int)
