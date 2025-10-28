@@ -931,7 +931,37 @@ class InfrastructureInterface:
             query += f" AND nuts_id LIKE '{area.upper()}%%'"
         query += "group by time order by time asc"
         with self.databases["weather"].connect() as connection:
-            return pd.read_sql_query(query, connection, index_col="time")
+            df = pd.read_sql_query(query, connection, index_col="time")
+
+        # Index Completeness check
+        full_index = pd.date_range(start=start, end=end, freq="h")
+
+        # detect issues
+        missing = full_index.difference(df.index.unique())  # absent timestamps
+        has_dupes = df.index.has_duplicates
+        num_cols = df.select_dtypes(include="number").columns# numerical column so no text will be interpolated
+        has_nans = df[num_cols].isna().any().any()
+
+        # fast path: nothing to fix
+        if len(missing) == 0 and not has_dupes and not has_nans:
+            return df
+
+        # fix duplicates
+        if has_dupes:
+            df = df[~df.index.duplicated(keep="first")]
+
+        # align (no-op if already complete)
+        df_full = df.reindex(full_index)
+
+        # fill NaNs that were present OR created by reindex
+        if len(num_cols):
+            df_full[num_cols] = df_full[num_cols].interpolate(
+                method="time", limit_direction="both"
+            )
+
+        df_full.index.name = "time"
+        df_full.dropna(axis='index', how="any", inplace=True)
+        return df_full
 
     def get_offshore_wind_series(self, start: datetime, end: datetime):
         area = "DEF02"
@@ -962,14 +992,39 @@ class InfrastructureInterface:
             end,
             area,
         )
+        # handling empty weather_df, happened for DE221 and DE255
+        chosen_area = area
         if weather_df.empty:
-            # happened for DE221
-            weather_df = self.get_weather_param(
-                WEATHER_PARAMS_ECMWF,
-                start,
-                end,
-                area[:-1],  # get weather for greater area
-            )
+            # candidates: last good area (if any), then walk backward through unique nuts3 (wrap-around)
+            order = list(pd.unique(self.plz_nuts["nuts3"]))
+            if area not in order:
+                raise ValueError(f"{area=} not found in nuts list")
+
+            candidates = []
+            if getattr(self, "_last_weather_area", None):
+                candidates.append(self._last_weather_area)
+
+            start_idx = order.index(area)
+            for step in range(1, len(order) + 1):  # walk all others, wrap-around
+                cand = order[(start_idx - step) % len(order)]
+                if cand not in candidates:
+                    candidates.append(cand)
+
+            # search until we find a non-missing DF
+            weather_df = None
+            for cand in candidates:
+                df_try = self.get_weather_param(WEATHER_PARAMS_ECMWF, start, end, cand)
+                if not df_try.empty:
+                    chosen_area = cand
+                    weather_df = df_try
+                    break
+
+            if weather_df.empty:
+                raise RuntimeError("No area returned usable weather data.")
+
+        # remember last good area
+        self._last_weather_area = chosen_area
+
 
         # convert from J/m^2 to Wh/m^2
         weather_df["ghi"] /= 3600
