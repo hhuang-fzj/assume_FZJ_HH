@@ -33,6 +33,7 @@ def load_oeds(
     nuts_config: list[str] = [],
     random=True,
     entsoe_demand=True,
+    component_exclusion_list : list[str] | None = None,
 ):
     """
     This initializes a scenario using the open-energy-data-server
@@ -56,7 +57,7 @@ def load_oeds(
     simulation_id = f"{scenario}_{study_case}"
     year = start.year
     logger.info(f"loading scenario {simulation_id} with {nuts_config}")
-    infra_interface = InfrastructureInterface("test", infra_uri)
+    infra_interface = InfrastructureInterface("test", infra_uri, components_to_exclude = component_exclusion_list)
 
     if not nuts_config or nuts_config == "nuts3":
         nuts_config = list(infra_interface.plz_nuts["nuts3"].unique())
@@ -66,6 +67,8 @@ def load_oeds(
         nuts_config = list(infra_interface.plz_nuts["nuts1"].unique())
     elif nuts_config == "nuts2":
         nuts_config = list(infra_interface.plz_nuts["nuts2"].unique())
+    else:
+        nuts_config = [nuts_config]
 
     world.setup(
         start=start,
@@ -127,7 +130,6 @@ def load_oeds(
         demand = demand.resample("h").mean() / len(nuts_config)
 
     for area in nuts_config:
-        #area = 'DE255'#Fixeme: only for bug shotting
         logger.info(f"loading config {area} for {year}")
         config_path = Path.home() / ".assume" / f"{area}_{year}"
         if not config_path.is_dir():
@@ -151,10 +153,13 @@ def load_oeds(
                     )
                 )
 
-            demand_save = demand.resample("h").mean()
+
             # demand in MW
             if not entsoe_demand:
+                demand_save = demand_save.resample("h").mean()
                 demand = demand_save
+            else:
+                demand_save = demand.resample("h").mean()#fixme: why should we overwrite the demand_save by demand? is demand not already resampled?
 
             try:
                 config_path.mkdir(parents=True, exist_ok=True)
@@ -377,12 +382,16 @@ if __name__ == "__main__":
     default_nuts_config = "DE1, DEA, DEB, DEC, DED, DEE, DEF"
     nuts_config = os.getenv("NUTS_CONFIG", default_nuts_config).split(",")
     nuts_config = [n.strip() for n in nuts_config]
-    nuts_config = "nuts3"
+    # nuts_config = "nuts3"
+    nuts_config = "DEA26" #example for FZJ(Landkreis Dueren)
     year = 2024
     random = True
     type = "random" if random else "static"
+    exclude_components = [""]#list of str('EinheitMastrID_to_exclude')
     if isinstance(nuts_config, str):
         study_case = f"{nuts_config}_{type}_{year}"
+        if exclude_components:
+            study_case = f"{nuts_config}_{type}_{year}_SAO" # specify the simulation name for Smart Area Operation
     else:
         study_case = f"custom_{type}_{year}"
     start = datetime(year, 1, 1)
@@ -426,6 +435,8 @@ if __name__ == "__main__":
         marketdesign,
         bidding_strategies,
         nuts_config,
+        entsoe_demand=False,
+        component_exclusion_list = exclude_components
     )
 
     world.run()

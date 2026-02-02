@@ -56,9 +56,11 @@ class InfrastructureInterface:
             "instrat_pl",
             "entsoe",
         ),
+        components_to_exclude: list[str] | None = None, # list of "EinheitMastrNummer" to exclude component from the simulation
     ):
         self.databases = {}
         self._last_weather_area = None #To fix missing data problem of weather data in nuts area, by note the last working area
+        self.components_to_exclude = components_to_exclude
         for db in structure_databases:
             schema_name = db
             if db == "nuts":
@@ -257,14 +259,18 @@ class InfrastructureInterface:
 
         type_years = np.asarray([0, 2000, 2024])  # technical setting typ
         df["type"] = [type_years[type_years < x.year][-1] for x in df["startDate"]]
-        df["generatorID"] = df["generatorID"].fillna(0)
+        df["generatorID"] = (
+            pd.to_numeric(df["generatorID"], errors="coerce") #To avoide future warning of silent downcast
+            .fillna(0)
+            .astype("int64")
+        )
         if "kwkPowerTherm" in df.columns:
-            df["kwkPowerTherm"] = df["kwkPowerTherm"].fillna(0)
+            df["kwkPowerTherm"] = pd.to_numeric(df["kwkPowerTherm"], errors="coerce").fillna(0)#To avoide future warning of silent downcast
         else:
             df["kwkPowerTherm"] = 0
 
         if "kwkPowerElec" in df.columns:
-            df["kwkPowerElec"] = df["kwkPowerElec"].fillna(0)
+            df["kwkPowerElec"] = pd.to_numeric(df["kwkPowerElec"], errors="coerce").fillna(0) #To avoide future warning of silent downcast
         else:
             df["kwkPowerElec"] = 0
         return df
@@ -334,6 +340,10 @@ class InfrastructureInterface:
 
         with self.databases["mastr"].connect() as conn:
             df = pd.read_sql(query, conn)
+
+        # exclude named components from the simulation according to self.components_to_exclude
+        if getattr(self, "components_to_exclude", None):
+            df = self.exclude_components(df)
 
         if df.empty:
             return df
@@ -425,6 +435,9 @@ class InfrastructureInterface:
         # Get Data from Postgres
         with self.databases["mastr"].connect() as conn:
             df = pd.read_sql(query, conn)
+        #exclude named components from the simulation according to self.components_to_exclude
+        if getattr(self, "components_to_exclude", None):
+            df = self.exclude_components(df)
         # If the response Dataframe is not empty set technical parameter
         if df.empty:
             return df
@@ -444,16 +457,14 @@ class InfrastructureInterface:
         if solar_type == "roof_top":
             # all PVs with nan and startDate > 2013 have ownConsumption
             missing_values = df["ownConsumption"].isna()
-            deadline = [date.year > 2013 for date in df["startDate"]]
-            own_consumption = [
-                all([missing_values[i], deadline[i]])
-                for i in range(len(missing_values))
-            ]
+
+            missing = df["ownConsumption"].isna()
+            deadline = df["startDate"].dt.year > 2013
+            own_consumption = missing & deadline #to avoid key erro after components are exluded
+
             df.loc[own_consumption, "ownConsumption"] = 1
-            grid_use = [
-                all([missing_values[i], not deadline[i]])
-                for i in range(len(missing_values))
-            ]
+
+            grid_use = missing & ~deadline #to avoid key erro after components are exluded
             df.loc[grid_use, "ownConsumption"] = 0
             df["ownConsumption"] = df["ownConsumption"].replace(689, 1)
             df["ownConsumption"] = df["ownConsumption"].replace(688, 0)
@@ -465,13 +476,11 @@ class InfrastructureInterface:
             df["ownConsumption"] = 0
         if solar_type == "roof_top":
             # all PVs with nan and startDate > 2012 and maxPower > 30 kWp are limited to 70%
-            missing_values = df["limited"].isna()
+            missing = df["limited"].isna()#
             power_cap = df["maxPower"] > 30
-            deadline = [date.year > 2012 for date in df["startDate"]]
-            limited = [
-                all([missing_values[i], deadline[i], power_cap[i]])
-                for i in range(len(missing_values))
-            ]
+            deadline = df["startDate"].dt.year > 2012
+            limited = missing & deadline & power_cap  #to avoid key erro after components are exluded
+
             df.loc[limited, "limited"] = str("Ja, auf 70%")
             # rest nans have no limitation
             df["limited"] = df["limited"].fillna("Nein")
@@ -486,13 +495,11 @@ class InfrastructureInterface:
                 mastr_solar_azimuth[str(code)] for code in df["limited"]
             ]
         # all PVs with nan and startDate > 2016 and maxPower > 100 kWp have direct marketing
-        missing_values = df["eeg"].isna()
+        missing = df["eeg"].isna()
         power_cap = df["maxPower"] > 100
-        deadline = [date.year > 2016 for date in df["startDate"]]
-        eeg = [
-            all([missing_values[i], deadline[i], power_cap[i]])
-            for i in range(len(missing_values))
-        ]
+        deadline = df["startDate"].dt.year > 2016
+        eeg = missing & deadline & power_cap #to avoid key erro after components are exluded
+
         df.loc[eeg, "eeg"] = 0
         # rest nans are eeg assets and are managed by the tso
         df["eeg"] = df["eeg"].replace(np.nan, 0)
@@ -545,6 +552,9 @@ class InfrastructureInterface:
         # Get Data from Postgres
         with self.databases["mastr"].connect() as conn:
             df = pd.read_sql(query, conn)
+        #exclude named components from the simulation according to self.components_to_exclude
+        if getattr(self, "components_to_exclude", None):
+            df = self.exclude_components(df)
         # If the response Dataframe is not empty set technical parameter
         if df.empty:
             return df
@@ -617,6 +627,9 @@ class InfrastructureInterface:
         # Get Data from Postgres
         with self.databases["mastr"].connect() as conn:
             df = pd.read_sql(query, conn)
+        #exclude named components from the simulation according to self.components_to_exclude
+        if getattr(self, "components_to_exclude", None):
+            df = self.exclude_components(df)
         # If the response Dataframe is not empty set technical parameter
         return df
 
@@ -658,6 +671,9 @@ class InfrastructureInterface:
         # Get Data from Postgres
         with self.databases["mastr"].connect() as conn:
             df = pd.read_sql(query, conn)
+        #exclude named components from the simulation according to self.components_to_exclude
+        if getattr(self, "components_to_exclude", None):
+            df = self.exclude_components(df)
 
         return df
 
@@ -705,6 +721,9 @@ class InfrastructureInterface:
         with self.databases["mastr"].connect() as conn:
             df = pd.read_sql(query, conn)
 
+        #exclude named components from the simulation according to self.components_to_exclude
+        if getattr(self, "components_to_exclude", None):
+            df = self.exclude_components(df)
         # If the response Dataframe is not empty set technical parameter
         if df.empty:
             return []
@@ -761,7 +780,9 @@ class InfrastructureInterface:
             return self.get_demand_in_area("DEB16")
         elif area == "DEB1D":
             return self.get_demand_in_area("DEB19")
-        query = f"""select sum(sector_consumption_residential) as household, sum(sector_consumption_retail) as business,
+        #Fixme: This function only works with NUTs_3 areas(DEA26, not DEA2)
+        query = f"""
+                select sum(sector_consumption_residential) as household, sum(sector_consumption_retail) as business,
                 sum(sector_consumption_industrial) as industry, sum(sector_consumption_agricultural) as agriculture
                 from demand where version='v0.4.5' and nuts LIKE '{area}%%' 
                 """
@@ -790,6 +811,7 @@ class InfrastructureInterface:
 
         query = (
             f'SELECT spe."LokationMastrNummer" as "unitID", ' 
+            f'spe."EinheitMastrNummer" as "unitMastrID", '
             f'so."Nettonennleistung" as "maxPower", '
             f'spe."Nettonennleistung" as "batPower", '
             f'COALESCE(so."Laengengrad", {longitude}) as "lon", '
@@ -815,6 +837,9 @@ class InfrastructureInterface:
         # Get Data from Postgres
         with self.databases["mastr"].connect() as conn:
             df = pd.read_sql(query, conn)
+        #exclude named components from the simulation according to self.components_to_exclude
+        if getattr(self, "components_to_exclude", None):
+            df = self.exclude_components(df)
 
         # If the response Dataframe is not empty set technical parameter
         if df.empty:
@@ -861,7 +886,7 @@ class InfrastructureInterface:
         # d = holidays.DE(subdiv='NW', years=year)
         holi = holidays.DE(years=year)
         e_slp = ElecSlp(year, holidays=holi)
-        profile = e_slp.get_profile(ann_el_demand_per_sector)
+        profile = e_slp.get_scaled_power_profiles(ann_el_demand_per_sector)
         profile["g7"] = (
             demand["industry"] + demand["agriculture"] + demand["business"] / 2
         ) / 8760
@@ -1065,14 +1090,14 @@ class InfrastructureInterface:
     ):
         """returns actual entsoe demand of the given country for the given time"""
         query = f"""
-SELECT
-  "index" as time,
-  actual_load
-FROM query_load
-WHERE
-  index BETWEEN '{start}' AND '{end}' AND country = '{country}'
-ORDER BY 1
-"""
+                SELECT
+                  "index" as time,
+                  actual_load
+                FROM query_load
+                WHERE
+                  index BETWEEN '{start}' AND '{end}' AND country = '{country}'
+                ORDER BY 1
+                """
         with self.databases["entsoe"].connect() as connection:
             return pd.read_sql_query(query, connection, index_col="time")[
                 "actual_load"
@@ -1105,6 +1130,79 @@ ORDER BY 1
 
     def get_grid_edges(self):
         return {}
+
+    def exclude_components(self, systems: pd.DataFrame):
+        """
+        Exclude MaStR components from query results without touching the DB.
+
+        This method expects that `self.component_to_exclude` contains a list/set of MaStR IDs
+        (typically EinheitMastrNummer) that should be excluded from the scenario.
+
+        Supported inputs:
+          - pandas.DataFrame: filters rows
+          - list[dict]: filters items
+          - None: returns None
+
+        Filtering columns (first match wins for single-column data, but if multiple exist,
+        a row/item is excluded if ANY of these columns/keys is in the exclusion set):
+          - "unitMastrID"  (preferred)
+          - "unitID"       (fallback used by many existing getters)
+        """
+        if systems is None:
+            return None
+
+        # Read exclusion list from the interface instance.
+        exclude_ids = getattr(self, "components_to_exclude", None)
+        if not exclude_ids:
+            return systems
+
+        # Normalize to a set of strings for consistent comparisons.
+        exclude_set = {str(x) for x in exclude_ids if x is not None and str(x).strip() != ""}
+        if not exclude_set:
+            return systems
+
+        # ---- DataFrame case -----------------------------------------------------
+        if isinstance(systems, pd.DataFrame):
+            # Prefer unitMastrID; fall back to unitID; also tolerate alternative naming if present.
+            if "unitMastrID" in systems.columns:
+                id_col = "unitMastrID"
+            elif "unitID" in systems.columns:
+                id_col = "unitID"
+            else:
+                logger.warning(
+                    "exclude_components(): no ID column found (expected 'unitMastrID' or 'unitID'). Returning unfiltered result."
+                )
+                return df
+
+            # Exclude row if ANY candidate column matches an excluded id.
+            keep_mask = np.ones(len(systems), dtype=bool)
+            keep_mask &= ~systems[id_col].astype(str).isin(exclude_set)
+            pop_mask = ~keep_mask
+            matched_ids = set(systems[id_col].astype(str).loc[pop_mask].unique())
+            if len(matched_ids) > 0:
+                exclude_ids[:] = [x for x in exclude_ids if str(x) not in matched_ids]
+
+
+                removed = int(pop_mask.sum())# number of removed item may not matches number of poped IDs for solar storage system
+                logger.info(
+                    "exclude_components(): excluded %s row(s) by MaStR id using columns %s. Popped %s id(s) from exclusion list, %s components left to exclude ",
+                    removed,
+                    id_col,
+                    len(matched_ids),
+                    len(exclude_ids)
+                )
+                print("list of remaining_ids: %s: ",exclude_ids)
+
+            # Preserve index; return a copy to avoid SettingWithCopy surprises downstream.
+            return systems.loc[keep_mask].copy()
+
+        # ---- Unknown type -------------------------------------------------------
+        logger.warning(
+            "exclude_components(): unsupported type %s. Returning unfiltered result.",
+            type(systems).__name__,
+        )
+        return systems
+
 
 
 def get_wind_series(wind_systems: pd.DataFrame, weather_df: pd.DataFrame):
@@ -1170,6 +1268,7 @@ def get_solar_series(solar_systems: pd.DataFrame, weather_df: pd.DataFrame):
         #Todo: Find out how to handel East-West system: "https://pvlib-python.readthedocs.io/en/v0.9.0/auto_examples/plot_mixed_orientation.html"
         if "batPower" in group.columns:
             battery_power += group["batPower"].sum()
+        #Todo: Add here a function to process Ost-West-Anlagen
         system = PVSystem(
             surface_tilt=tilt,
             surface_azimuth=azimuth,
