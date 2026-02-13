@@ -23,11 +23,6 @@ class Forecaster:
     Args:
         index (pandas.Series): The index of the forecasts.
 
-    Example:
-        >>> forecaster = Forecaster(index=pd.Series([1, 2, 3]))
-        >>> forecast = forecaster['temperature']
-        >>> print(forecast)
-
     """
 
     def __init__(self, index: FastIndex):
@@ -56,11 +51,6 @@ class Forecaster:
 
         Returns:
             FastSeries: The availability of the unit.
-
-        Example:
-        >>> forecaster = Forecaster(index=pd.Series([1, 2, 3]))
-        >>> availability = forecaster.get_availability('unit_1')
-        >>> print(availability)
         """
 
         return self[f"availability_{unit}"]
@@ -75,11 +65,6 @@ class Forecaster:
 
         Returns:
             FastSeries: The price of the fuel.
-
-        Example:
-            >>> forecaster = Forecaster(index=pd.Series([1, 2, 3]))
-            >>> price = forecaster.get_price('lignite')
-            >>> print(price)
         """
 
         return self[f"fuel_price_{fuel_type}"]
@@ -174,11 +159,6 @@ class CsvForecaster(Forecaster):
         Args:
             data (pd.DataFrame | pd.Series | None): The forecast data.
             prefix (str): The prefix of the column.
-
-        Example:
-            >>> forecaster = CsvForecaster(index=pd.Series([1, 2, 3]))
-            >>> forecaster.set_forecast(pd.Series([22, 25, 17], name='temperature'), prefix='location_1_')
-            >>> print(forecaster['location_1_temperature'])
         """
 
         if data is None:
@@ -690,11 +670,6 @@ class RandomCsvForecaster(CsvForecaster):
         powerplants_units (pandas.DataFrame): The power plants.
         sigma (float): The standard deviation of the noise.
 
-    Example:
-        >>> forecaster = RandomCsvForecaster(index=pd.Series([1, 2, 3]))
-        >>> forecaster.set_forecast(pd.Series([22, 25, 17], name='temperature'), prefix='location_1_')
-        >>> print(forecaster['location_1_temperature'])
-
     """
 
     def __init__(
@@ -764,13 +739,6 @@ class NaiveForecast(Forecaster):
         price_forecast (float | list, optional): The price forecast.
         *args: Variable length argument list.
         **kwargs: Arbitrary keyword arguments.
-
-    Example:
-        >>> forecaster = NaiveForecast(demand=100, co2_price=10, fuel_price=10, availability=1, price_forecast=50)
-        >>> print(forecaster['demand'])
-
-        >>> forecaster = NaiveForecast(index=pd.Series([1, 2, 3]), demand=[100, 200, 300], co2_price=[10, 20, 30])
-        >>> print(forecaster["demand"][2])
     """
 
     def __init__(
