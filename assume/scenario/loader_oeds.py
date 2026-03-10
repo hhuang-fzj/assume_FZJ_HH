@@ -7,6 +7,7 @@ import os, json
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
+from dotenv import load_dotenv
 
 import numpy as np
 import pandas as pd
@@ -369,6 +370,7 @@ def load_oeds(
 
 
 if __name__ == "__main__":
+    load_dotenv()
     db_uri = os.getenv("DB_URI", "postgresql://assume:assume@localhost:5432/assume")
     world = World(database_uri=db_uri)
     scenario = "world_mastr"

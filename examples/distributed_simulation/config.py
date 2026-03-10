@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
 
 import pandas as pd
 from dateutil import rrule as rr
@@ -16,7 +17,7 @@ from assume.common.market_objects import MarketConfig, MarketProduct
 from assume.common.utils import datetime2timestamp
 
 log = logging.getLogger(__name__)
-
+load_dotenv()#read the .env in the work directory
 
 db_uri = os.getenv("DB_URI", "postgresql://assume:assume@localhost:5432/assume")
 use_mqtt = os.getenv("MQTT_BROKER", False)

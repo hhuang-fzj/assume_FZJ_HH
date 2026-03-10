@@ -5,6 +5,7 @@
 # %%
 import logging
 import os
+from dotenv import load_dotenv
 
 from assume import World
 from assume.scenario.loader_csv import load_scenario_folder, run_learning
@@ -111,7 +112,7 @@ if __name__ == "__main__":
     - local_db: without database and grafana
     - timescale: with database and grafana (note: you need docker installed)
     """
-
+    load_dotenv()#read the .env in the work directory
     # select to store the simulation results in a local database or in timescale
     # when using timescale, you need to have docker installed and can access the grafana dashboard
     data_format = os.getenv("DATA_FORMAT", "local_db")  # "local_db" or "timescale"
