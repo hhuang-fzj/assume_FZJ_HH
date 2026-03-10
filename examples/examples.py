@@ -114,15 +114,18 @@ if __name__ == "__main__":
 
     # select to store the simulation results in a local database or in timescale
     # when using timescale, you need to have docker installed and can access the grafana dashboard
-    data_format = "local_db"  # "local_db" or "timescale"
+    data_format = os.getenv("DATA_FORMAT", "local_db")  # "local_db" or "timescale"
 
     # select the example to run from the available examples above
-    example = "small_with_vre_and_storage"
+    example = os.getenv("EXAMPLE", "small_with_vre_and_storage")
+
+    #define personalized input path
+    in_path=os.getenv("INPUT_PATH", "/inputs")
 
     if data_format == "local_db":
         db_uri = "sqlite:///./examples/local_db/assume_db.db"
     elif data_format == "timescale":
-        db_uri = "postgresql://assume:assume@localhost:5432/assume"
+        db_uri = os.getenv("DB_URI", "postgresql://assume:assume@localhost:5432/assume")
 
     # create world
     world = World(database_uri=db_uri, export_csv_path=csv_path)
@@ -130,7 +133,7 @@ if __name__ == "__main__":
     # load scenario
     load_scenario_folder(
         world,
-        inputs_path="examples/inputs",
+        inputs_path=in_path,
         scenario=available_examples[example]["scenario"],
         study_case=available_examples[example]["study_case"],
     )

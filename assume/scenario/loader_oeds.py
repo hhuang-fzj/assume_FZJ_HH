@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import logging
-import os
+import os, json
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -369,7 +369,7 @@ def load_oeds(
 
 
 if __name__ == "__main__":
-    db_uri = "postgresql://assume:assume@localhost:5432/assume"
+    db_uri = os.getenv("DB_URI", "postgresql://assume:assume@localhost:5432/assume")
     world = World(database_uri=db_uri)
     scenario = "world_mastr"
     # FH Aachen internal server
@@ -382,12 +382,12 @@ if __name__ == "__main__":
     default_nuts_config = "DE1, DEA, DEB, DEC, DED, DEE, DEF"
     nuts_config = os.getenv("NUTS_CONFIG", default_nuts_config).split(",")
     nuts_config = [n.strip() for n in nuts_config]
-    # nuts_config = "nuts3"
+    #nuts_config = "nuts3"
     nuts_config = "DEA26" #example for FZJ(Landkreis Dueren)
     year = 2024
     random = True
     type = "random" if random else "static"
-    exclude_components = [""]#list of str('EinheitMastrID_to_exclude')
+    exclude_components = json.loads(os.getenv("EXCLUDE_COMPONENTS", "[]")) #list of str('EinheitMastrID_to_exclude')
     if isinstance(nuts_config, str):
         study_case = f"{nuts_config}_{type}_{year}"
         if exclude_components:
