@@ -121,7 +121,7 @@ if __name__ == "__main__":
     example = os.getenv("EXAMPLE", "small_with_vre_and_storage")
 
     #define personalized input path
-    in_path=os.getenv("INPUT_PATH", "/inputs")
+    in_path=os.getenv("INPUT_PATH", "./inputs")
 
     if data_format == "local_db":
         db_uri = "sqlite:///./examples/local_db/assume_db.db"

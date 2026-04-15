@@ -695,7 +695,7 @@ def str_to_bool(val):
 
 
 def get_supported_solver(default_solver: str | None = None):
-    SOLVERS = ["appsi_highs", "gurobi", "glpk", "cbc", "cplex"]
+    SOLVERS = ["gurobi", "appsi_highs", "glpk", "cbc", "cplex"]
 
     # Check if the solver is available
     solvers = check_available_solvers(*SOLVERS)
@@ -712,3 +712,77 @@ def get_supported_solver(default_solver: str | None = None):
         solver = solvers[0]
 
     return solver
+
+#Function for comando integration
+def create_pwlm(base_eff=1, fit_params_nom=None, fit_params_den=None, pwlm_breakpoints=4, min_part_load=0,
+                make_eff_pwl=False):
+    """Create piecewise linear model author: n.hampel
+
+    Creates a piecewise linear model for component efficiency or the input output relation directly.
+
+    Arguments
+    ---------
+    base_eff : float
+        base efficiency as used in the component
+    fit_params_nom : dict
+        fit parameters for the numerator of the efficiency as used in the component
+    fit_params_den : dict
+        fit parameters for the denominator of the efficiency as used in the component
+    pwlm_breakpoints : int
+        Number of breakpoints for plwm
+    min_part_load : float
+        Minimal part load as used in component (function will only be linearised for inputs greater than min_part_load)
+    make_eff_pwl : bool
+        TRUE: PWLM is created for efficiency. FALSE: PWLM is created for relative input output relation.
+
+     Returns
+    -------
+    MILP_model : Object
+        MILP of the PWLM
+    """
+    import numpy as np
+    from Univariate_model import LinearModel as LM
+    from Opt_model import UnivariateModel as UvM
+
+    if not fit_params_nom:
+        fit_params_nom = {0: 1}
+    if not fit_params_den:
+        fit_params_den = {0: 1}
+
+    def function(x):
+        """eff = f(out_rel)"""
+        numerator = sum(coeff * x ** power
+                        for power, coeff in
+                        fit_params_nom.items())
+        denominator = sum(coeff * x ** power
+                          for power, coeff in fit_params_den.items())
+        eff = base_eff * numerator / denominator
+        return eff
+
+    'Generate some data points using a function'
+    data = list()
+    n_data = 500
+    data.append(np.zeros(n_data))
+    data.append(np.zeros(n_data))
+    if make_eff_pwl:
+        # input of the model is out_rel, the output is eff
+        for i, x in enumerate(np.linspace(min_part_load, 1, n_data)):
+            data[0][i] = x              # x = out_rel
+            data[1][i] = function(x)    # Y = eff
+    else:
+        # input of the model is inp_rel = out_rel / eff, the out
+        for i, y in enumerate(np.linspace(min_part_load, 1, n_data)):
+            data[0][i] = y / function(y)    # x = inp_rel
+            data[1][i] = y                  # y = out_rel
+
+    'create a piecewise linear model'
+    linear_model = LM(data)
+    linear_model.optimized_model(pwlm_breakpoints)
+    # linear_model.visualize(visualize_data=True)
+
+    'create object for MILP model generation'
+    model = UvM(linear_model)
+
+    'create MILP formulation'
+    MILP_model = model.reformulate_as_MILP('mc')  # in this case a convex combination is used'
+    return MILP_model

@@ -109,8 +109,8 @@ class PayAsClearRole(MarketRole):
                         added = supply_order["volume"] - supply_order.get(
                             "accepted_volume", 0
                         )
-                        should_insert = not supply_order.get("accepted_volume")
-                        supply_order["accepted_volume"] = supply_order["volume"]
+                        should_insert = not supply_order.get("accepted_volume")#the order should be inserted into orderbook only if it is not accepted before
+                        supply_order["accepted_volume"] = supply_order["volume"]#Update the
                         if should_insert:
                             accepted_supply_orders.append(supply_order)
                         gen_vol += added

@@ -44,6 +44,7 @@ dependencies = [
     "pyomo >=6.8.0",
     "xarray <2025.7.0", # https://github.com/PyPSA/linopy/issues/470
     "highspy",
+    "python-dotenv",
 ]
 
 [project.optional-dependencies]
@@ -72,6 +73,10 @@ test = [
 all = [
     "assume-framework[oeds, network, learning]",
 ]
+comando = [
+    "comando",
+    "gurobipy",
+]#todo: find out how to import LinMoG using pyproject for create pwlm; check if gurobipy should be a seperated optional dependency
 
 [project.urls]
 Homepage = "https://assume-project.de/"
