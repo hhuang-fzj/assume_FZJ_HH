@@ -753,7 +753,7 @@ class NaiveForecast(Forecaster):
         **kwargs,
     ):
         super().__init__(index)
-        self.index = FastIndex(start=index[0], end=index[-1], freq=pd.infer_freq(index))
+        self.index = FastIndex(start=index[0], end=index[-1], freq=pd.infer_freq(index))# simple pd.Series does not support index[-1]
 
         # Convert attributes to FastSeries if they are not already Series
         self.fuel_price = FastSeries(
@@ -804,3 +804,123 @@ class NaiveForecast(Forecaster):
             return self.price_forecast
         else:
             return FastSeries(value=0.0, index=self.index)
+
+class SectorCouplingNaiveForecast(Forecaster):
+    """
+    This class represents a forecaster that generates forecasts for sector coupling components.
+
+    It inherits from the `Forecaster` class and initializes with the provided times series
+    for availability, fuel price, local electricity, heat and cooling price forecast.
+    If the optional parameters are constant values, they are converted to pandas Series with the
+    provided index. If the optional parameters are lists, they are converted to pandas Series with
+    the provided index and the corresponding values.
+    If no optional parameters are specified, a FastSeries with the default value will be created for the
+    missing parameter depending on the index.
+
+    Attributes:
+        index (pandas.Series): The index of the forecasts.
+        availability (float | list, optional): The availability of the power plants.
+        fuel_price (float | list, optional): The fuel price.
+        co2_price (float | list, optional): The CO2 price.
+        el_price_forecast (float | list, optional): The electricity price forecast.
+        he_price_forecast (float | list, optional): The heat price forecast.
+        col_price_forecast (float | list, optional): The cooling price forecast.
+
+    """
+
+    def __init__(
+        self,
+        index: pd.Series,
+        availability: float | list = 1,
+        fuel_price: float | list = 10,
+        co2_price: float | list = 10,
+        elc_price_forecast: float | list = 50,
+        het_price_forecast: float | list = 50,
+        col_price_forecast: float | list = 50,
+        *args,
+        **kwargs,
+    ):
+        """"
+
+        Args:
+            index (pandas.Series): The index of the forecasts.
+            availability (float | list, optional): The availability of the power plants.
+            feul_price (float | list, optional): The gas price.
+            co2_price (float | list, optional): The CO2 price.
+            el_price_forecast (float | list, optional): The electricity price forecast.
+            he_price_forecast (float | list, optional): The heat price forecast.
+            col_price_forecast (float | list, optional): The cooling price forecast.
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        """
+        super().__init__(index)
+        self.index = FastIndex(start=index[0], end=index[-1], freq=pd.infer_freq(index))
+
+        # Convert attributes to FastSeries if they are not already Series
+        self.fuel_price = FastSeries(
+            index=self.index, value=fuel_price, name="feul_price"
+        )
+        self.availability = FastSeries(
+            index=self.index, value=availability, name="availability"
+        )
+        self.co2_price = FastSeries(index=self.index, value=co2_price, name="co2_price")
+        self.elc_price_forecast = FastSeries(
+            index=self.index, value=elc_price_forecast, name="electricity_price_forecast"
+        )
+        self.het_price_forecast = FastSeries(
+            index=self.index, value=het_price_forecast, name="heat_price_forecast"
+        )
+        self.col_price_forecast = FastSeries(
+            index=self.index, value=col_price_forecast, name="cooling_price_forecast"
+        )
+
+        self.data_dict = {}
+
+        for key, value in kwargs.items():
+            self.data_dict[key] = FastSeries(index=self.index, value=value, name=key)
+
+    def __getitem__(self, column: str) -> FastSeries:
+        """
+        Retrieves forecasted values.
+
+        This method retrieves the forecasted values for a specific column based on the
+        provided parameters such as availability, fuel price, CO2 price, demand, and price
+        forecast. If the column matches one of the predefined parameters, the corresponding
+        value is returned as a pandas Series. If the column does not match, a Series of zeros is returned.
+
+        Args:
+            column (str): The column for which forecasted values are requested.
+
+        Returns:
+            FastSeries: The forecasted values for the specified column.
+
+        """
+
+        if column in self.data_dict.keys():
+            return self.data_dict[column]
+        elif "availability" in column:
+            return self.availability
+        elif column == "fuel_price_co2":
+            return self.co2_price
+        elif "fuel_price" in column:
+            return self.fuel_price
+        elif column == "price_EOM":
+            return self.elc_price_forecast
+        elif column == "price_HEAT":
+            return self.het_price_forecast#Todo: check the calling
+        elif column == "price_COOL":
+            return self.col_price_forecast
+        else:
+            return FastSeries(value=0.0, index=self.index)
+
+if __name__ == "__main__":
+    from datetime import datetime, timedelta
+    se_index = pd.date_range(
+        start=datetime(2024, 1, 1),
+        end=datetime(2024, 12, 31),
+        freq="h",
+    )
+    forecast = SectorCouplingNaiveForecast(index=se_index, demand = 100)
+    # forecast = NaiveForecast(index=pd.Series([1,2,3]), demand=100)
+    print(forecast['demand'])
