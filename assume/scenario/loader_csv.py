@@ -223,8 +223,13 @@ def load_dsm_units(
                 errors="ignore",
             )
             # Ensure that there is at least one record before adding to components
+            # If components share a technology, store them as a list
+            # init_components() needs extra handling.
             if not cleaned_data.empty:
-                components[tech] = cleaned_data.to_dict(orient="records")[0]
+                if cleaned_data.shape[0] > 1:
+                    components[tech] = cleaned_data.to_dict(orient="records")
+                else:
+                    components[tech] = cleaned_data.to_dict(orient="records")[0]
 
         dsm_unit["components"] = components
         dsm_units_dict[name] = dsm_unit
@@ -757,16 +762,16 @@ def setup_world(
     )
 
     if dsm_units is not None:
-        for unit_type, units_df in dsm_units.items():
-            dsm_units = read_units(
+        for unit_type, units_df in dsm_units.items():#iteration over unit type(e.g. Building, steel_plant)
+            dsm_unit_dict = read_units(
                 units_df=units_df,
                 unit_type=unit_type,
                 forecaster=forecaster,
                 world_bidding_strategies=world.bidding_strategies,
                 learning_mode=learning_config["learning_mode"],
             )
-        for op, op_units in dsm_units.items():
-            units[op].extend(op_units)
+            for op, op_units in dsm_unit_dict.items():#iteration over all UnitOperator in the same dsm_plant
+                units[op].extend(op_units)
 
     for op, op_units in powerplant_units.items():
         units[op].extend(op_units)
