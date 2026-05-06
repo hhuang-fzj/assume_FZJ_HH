@@ -1,12 +1,6 @@
-import logging
-
-from comando.core import System
-import pandas as pd
-
-from comando.utility import make_tac_objective
-from comando.interfaces.gurobi import to_gurobi
-from datetime import datetime
 from assume.units.comando_components import comando_dst
+from assume.common.temp_gurobi_visulize import interactive_timeseries_plot# temperary plot function for gurobi model
+# results
 
 # import pickle
 # import os
@@ -16,6 +10,7 @@ class ComandoFacade:
     def __init__(self, components, **kwargs):
         super().__init__(**kwargs)
         self.components = components
+        self.demand = kwargs['demand']#ToDo: move this to energy hub, it is not general feature of a COMANDO Unit
 
     def initialize_components(self):
         """
@@ -36,7 +31,9 @@ class ComandoFacade:
         """
         components = self.components.copy()#store the components config for the creation of component classes
         self.components.clear()# Clear the space for component classes
+        feuls = list()# temporal container for all the fuel types of the main component
 
+        #add main components by reading the csv configuration
         for technology, component_data in components.items():
             if technology in comando_dst:
                 # Get the class from the dictionary mapping (adjust `demand_side_technologies` to hold classes)
@@ -46,40 +43,70 @@ class ComandoFacade:
                         # Instantiate the component with the required parameters (unpack the component_data dictionary)
                         component_instance = component_class(**data)
                         self.components[technology + "_" + data['label']] = component_instance
-
+                        feuls.append(data['fuel_type'])
                 else:
                     # Instantiate the component with the required parameters (unpack the component_data dictionary)
                     component_instance = component_class(**component_data)
                     self.components[technology + "_" + component_data['label']] = component_instance
+                    feuls.append(component_data['fuel_type'])
+        #Add ancillary components: grids, demands
+        #Get the electrical bidirectional grid interface
+        grid_data = {
+            'label': 'Electricity',
+            'compensation': 1,#ToDo: Update this value with the market clearing result
+            'co2_factor': 0,
+            'constrain_flow': True,
+            'feedin_limit': None,
+        }
+        component_class = comando_dst['grid']
+        component_instance = component_class(**grid_data)
+        self.components["grid_Electricity"] = component_instance
+        #Get other energy sources for multi-energy unit depending on the fuels they need
+        if 'gas' in feuls:
+            grid_data = {
+                'label': 'Gas',
+                'compensation': 0,
+                'co2_factor': 0.201,
+            }
+            component_class = comando_dst['grid']
+            component_instance = component_class(**grid_data)
+            self.components["grid_Gas"] = component_instance
+        # Get demands the multi-energy unit needs to cover
+        for energy in self.demand.columns:
+            energy_type = energy.split()[0]
+            component_class = comando_dst['demand']
+            component_instance = component_class(energy_type)
+            self.components["demand" + "_" + energy_type] = component_instance
+
 
     def setup_model(self, presolve=True):
         # Initialize the Pyomo model
-        # along with optimal and flexibility constraints
-        # and the objective functions
+        # along with optimal and flexibility constraints and the objective functions
 
         self.optimisation_counter = 0
 
         self.initialize_components()
-        self.initialize_energy_system()#ToDo: tobe defined in the child class WVVZ
+        self.initialize_energy_system()#Define the specific connection between components within a unit.
 
-        self.define_constraints()# Placeholder for energy system relevant constraints
-        # self.define_objective_opt()
+        self.define_constraints()# Define extra constraints for this specific unit.
 
-        #Fixme: feature deactivate for test purpose, reactivate after implementation of both operation determination
+        self.opt_model = self.create_problem()# Read relevant parameter and create comando problem
 
-        # # Solve the model to determine the optimal operation without flexibility
-        # # and store the results to be used in the flexibility mode later
-        # if presolve:
-        #     self.determine_optimal_operation_without_flex(switch_flex_off=False)
-        #
-        # # Modify the model to include the flexibility measure constraints
-        # # as well as add a new objective function to the model
-        # # to maximize the flexibility measure
-        # if self.flexibility_measure in DSMFlex.flexibility_map:
-        #     DSMFlex.flexibility_map[self.flexibility_measure](self, self.model)
-        # else:
-        #     raise ValueError(f"Unknown flexibility measure: {self.flexibility_measure}")
     def determine_optimal_operation_without_flex(self):
         pass
-    def determine_optimal_operation_with_flex(self):
-        pass
+    def determine_optimal_operation_with_flex(self):#ToDo: rename the function in strategy
+        print("Solving...")#ToDo: Update the electricity price using
+        options = dict(  # Options assuming Gurobi 9.1.1
+            Seed=123,
+            NonConvex=2,
+            MIPGap=0,
+            MIPFocus=2,
+            OutputFlag=1,
+        )
+        self.opt_model.solve(**options)
+        if self.opt_model.SolCount > 0:
+            # Plot timeseries of variables from gurobi result as the user choose
+            interactive_timeseries_plot(self.opt_model)
+        else:
+            print("No feasible solution found. Status:", self.opt_model.Status)
+        print("Solving...")

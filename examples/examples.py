@@ -102,6 +102,10 @@ available_examples = {
         "scenario": "example_03c",
         "study_case": "base_case_2019_with_storage",
     },
+    "large_2024_with_comando_DSM": {
+        "scenario": "example_04",
+        "study_case": "comando_case_2019_with_DSM",
+    }
 }
 
 

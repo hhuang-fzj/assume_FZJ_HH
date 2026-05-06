@@ -231,6 +231,16 @@ def load_dsm_units(
                 else:
                     components[tech] = cleaned_data.to_dict(orient="records")[0]
 
+        #Read the plant’s dynamic demand profile from the specified demand file, if a file path is provided
+        #Curently only checks duplicates. Provide simulation index, if a comparison is needed
+        if isinstance(dsm_unit['demand'], str):
+            dsm_demand = load_file(
+                path=path,
+                config=config,
+                file_name=dsm_unit['demand'],
+                check_duplicates=True,
+            )
+            dsm_unit['demand'] = dsm_demand
         dsm_unit["components"] = components
         dsm_units_dict[name] = dsm_unit
 
