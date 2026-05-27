@@ -1,3 +1,4 @@
+from assume.common.fast_pandas import FastSeries
 from assume.units.comando_components import comando_dst
 from assume.common.temp_gurobi_visulize import interactive_timeseries_plot# temperary plot function for gurobi model
 # results
@@ -53,7 +54,7 @@ class ComandoFacade:
         #Get the electrical bidirectional grid interface
         grid_data = {
             'label': 'Electricity',
-            'compensation': 1,#ToDo: Update this value with the market clearing result
+            'compensation': 0.02,#ToDo: Update this value with the market clearing result
             'co2_factor': 0,
             'constrain_flow': True,
             'feedin_limit': None,
@@ -95,7 +96,10 @@ class ComandoFacade:
     def determine_optimal_operation_without_flex(self):
         pass
     def determine_optimal_operation_with_flex(self):#ToDo: rename the function in strategy
-        print("Solving...")#ToDo: Update the electricity price using
+        # ToDo: Update the electricity price in rolling horizon mode
+        # ToDo: ASSUME is working with MWh, check the unit during market clearing
+
+        print("Solving...")
         options = dict(  # Options assuming Gurobi 9.1.1
             Seed=123,
             NonConvex=2,
@@ -104,6 +108,16 @@ class ComandoFacade:
             OutputFlag=1,
         )
         self.opt_model.solve(**options)
+        opt_power_requirement = [
+            self.opt_model.getVarByName(f"Electricity_consumption[{t}]").X
+            - self.opt_model.getVarByName(f"Electricity_feedin[{t}]").X
+            for t in range(len(self.index))
+        ]
+
+        self.opt_power_requirement = FastSeries(
+            index=self.index,
+            value=opt_power_requirement,
+        )
         if self.opt_model.SolCount > 0:
             # Plot timeseries of variables from gurobi result as the user choose
             interactive_timeseries_plot(self.opt_model)
