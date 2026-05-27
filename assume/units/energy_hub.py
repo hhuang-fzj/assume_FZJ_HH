@@ -85,10 +85,10 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
                 )
 
         self.natural_gas_price = self.forecaster['fuel_price_natural gas']
-        self.electricity_price = self.forecaster['price_EOM']
-        self.heating_price = self.forecaster['price_HEAT']
+        self.electricity_price = self.forecaster['price_LLEC']
+        self.heating_price = self.forecaster['price_HEAT'] #ToDo: add thermal price forecast
         self.cooling_price = self.forecaster['price_COOL']
-        self.co2_price = self.forecaster['price_CO2']
+        self.co2_price = self.forecaster['price_CO2']#ToDo: add Emission price
 
         self.objective = objective
 
@@ -157,6 +157,3 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
         )
 
         return to_gurobi(P)
-
-    def process_load_data(self, load_series):
-        return load_series[:745]
