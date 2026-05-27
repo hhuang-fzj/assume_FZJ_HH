@@ -470,18 +470,20 @@ class CsvForecaster(Forecaster):
         else:
             fuel_price = pd.Series(0.0, index=self.index)
 
-        emission_factor = pp_series["emission_factor"]
-        co2_price = self.forecasts["fuel_price_co2"]
-
         fuel_cost = fuel_price / pp_series["efficiency"]
-        emissions_cost = co2_price * emission_factor / pp_series["efficiency"]
         additional_cost = (
             pp_series["additional_cost"] if "additional_cost" in pp_series else 0.0
         )
-
-        marginal_cost = fuel_cost + emissions_cost + additional_cost
-
-        return marginal_cost
+        #enable the deactivation of emission calculation by setting the emission factor to negative
+        if pp_series["emission_factor"] > 1e-9 :
+            emission_factor = pp_series["emission_factor"]
+            co2_price = self.forecasts["fuel_price_co2"]
+            emissions_cost = co2_price * emission_factor / pp_series["efficiency"]
+            marginal_cost = fuel_cost + emissions_cost + additional_cost
+            return marginal_cost
+        else:
+            marginal_cost = fuel_cost + additional_cost
+            return marginal_cost
 
     def calculate_node_specific_congestion_forecast(self) -> pd.DataFrame:
         """
