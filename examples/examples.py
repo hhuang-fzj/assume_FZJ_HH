@@ -170,5 +170,4 @@ if __name__ == "__main__":
     if world.learning_config.get("learning_mode", False):
         # run learning if learning mode is enabled
         run_learning(world)
-
-    world.run()
+    world.run(force_trace=True)

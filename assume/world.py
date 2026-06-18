@@ -43,6 +43,7 @@ from assume.strategies import (
     bidding_strategies,
 )
 from assume.units import BaseUnit, demand_side_technologies, unit_types
+from assume.common.pycharm_debug import install_pycharm_tracing_task_factory
 
 file_handler = logging.FileHandler(filename="assume.log", mode="w+")
 stdout_handler = logging.StreamHandler(stream=sys.stdout)
@@ -744,6 +745,7 @@ class World:
             start_ts (datetime.datetime): The start timestamp for the simulation run.
             end_ts (datetime.datetime): The end timestamp for the simulation run.
         """
+        print("\nNormal Run\n")
         logger.debug("activating container")
         # agent is implicit added to self.container._agents
         async with activate(self.container) as c:
@@ -779,7 +781,56 @@ class World:
                     pbar.update(delta)
             pbar.close()
 
-    def run(self):
+    async def async_run_trace(self, start_ts: datetime, end_ts: datetime):
+        """
+        Run the simulation asynchronously, progressing the simulation time from the start timestamp to the end timestamp,
+        allowing registration before the first opening. If distributed roles are enabled, broadcast the simulation time.
+        Iterate through the simulation time, updating the progress bar and the simulation description. Once the simulation
+        time reaches the end timestamp, close the progress bar and shut down the simulation container.
+
+        Args:
+            start_ts (datetime.datetime): The start timestamp for the simulation run.
+            end_ts (datetime.datetime): The end timestamp for the simulation run.
+        """
+
+        install_pycharm_tracing_task_factory(FORCE_PYCHARM_TRACE_TASKS=True)
+
+        logger.debug("activating container")
+        # agent is implicit added to self.container._agents
+        async with activate(self.container) as c:
+            await tasks_complete_or_sleeping(c)
+            logger.debug("all agents up - starting simulation")
+
+            pbar = tqdm(total=end_ts - start_ts)
+
+            if isinstance(self.clock, ExternalClock):
+                # allow registration before first opening
+                self.clock.set_time(start_ts - 1)
+                if self.distributed_role is not False:
+                    await self.clock_manager.broadcast(self.clock.time)
+                prev_delta = 0
+                while self.clock.time < end_ts:
+                    await asyncio.sleep(0)
+                    delta = await self._step(c)
+                    if delta or prev_delta:
+                        pbar.update(delta)
+                        pbar.set_description(
+                            f"{self.simulation_desc} {timestamp2datetime(self.clock.time)}",
+                            refresh=False,
+                        )
+                    else:
+                        self.clock.set_time(end_ts)
+                    prev_delta = delta
+            else:
+                # real-time mode
+                while self.clock.time < end_ts:
+                    time = self.clock.time
+                    await asyncio.sleep(1)
+                    delta = self.clock.time - time
+                    pbar.update(delta)
+            pbar.close()
+
+    def run(self, force_trace=False):
         """
         Run the simulation.
 
@@ -795,9 +846,14 @@ class World:
         end_ts = datetime2timestamp(self.end)
 
         try:
-            return self.loop.run_until_complete(
-                self.async_run(start_ts=start_ts, end_ts=end_ts)
-            )
+            if force_trace and sys.gettrace() is not None:
+                return self.loop.run_until_complete(
+                    self.async_run_trace(start_ts=start_ts, end_ts=end_ts)
+                )
+            else:
+                return self.loop.run_until_complete(
+                    self.async_run(start_ts=start_ts, end_ts=end_ts)
+                )
         except KeyboardInterrupt:
             pass
 
