@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import Awaitable
 
 
 _INSTALLED = False
 
 
-def install_pycharm_tracing_task_factory(FORCE_PYCHARM_TRACE_TASKS = False) -> None:
+def install_pycharm_tracing_task_factory() -> None:
     """
     Debug-only helper for PyCharm SSH debugging with Mango asyncio tasks.
 
@@ -22,9 +21,6 @@ def install_pycharm_tracing_task_factory(FORCE_PYCHARM_TRACE_TASKS = False) -> N
     at the beginning of that task.
     """
     global _INSTALLED
-
-    if FORCE_PYCHARM_TRACE_TASKS != True :
-        return
 
     if _INSTALLED:
         return
