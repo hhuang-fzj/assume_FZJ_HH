@@ -4,6 +4,7 @@
 
 import logging
 import shutil
+import sys
 from collections import defaultdict
 from datetime import datetime
 from multiprocessing import Lock
@@ -194,7 +195,11 @@ class WriteOutput(Role):
         if self.db_uri:
             self.db = create_engine(self.db_uri)
         if self.db is not None:
-            self.delete_db_scenario(self.simulation_id)
+            if sys.gettrace() is not None:
+                print('\n"""In debug mode, old simulation is kept"""\n')
+
+            else:
+                self.delete_db_scenario(self.simulation_id)
 
         if self.save_frequency_hours is not None:
             recurrency_task = rr.rrule(

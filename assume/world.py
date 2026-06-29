@@ -784,7 +784,7 @@ class World:
                     pbar.update(delta)
             pbar.close()
 
-    def run(self, force_trace=False):
+    def run(self):
         """
         Run the simulation.
 
