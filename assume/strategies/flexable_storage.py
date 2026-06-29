@@ -208,6 +208,274 @@ class flexableEOMStorage(BaseStrategy):
             )
             unit.outputs["total_costs"].loc[start:end_excl] = costs
 
+class flexableEOMEV(BaseStrategy):
+    """
+    A flexableEOMStorage-based bidding strategy for bidirectional EV charging stations.
+
+    The strategy compares the current price forecast with the average price
+    forecast over a given foresight. If the current price is higher than the
+    average price, the unit tends to discharge. Otherwise, the unit tends to
+    charge.
+
+    For EV charging stations, the strategy updates the virtual battery SOC
+    before bidding and respects departure SOC requirements during departure
+    timesteps.
+
+    Attributes:
+        foresight (datetime.timedelta): Foresight for the average price calculation.
+
+    Args:
+        *args: Additional arguments.
+        **kwargs: Additional keyword arguments.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.foresight = parse_duration(kwargs.get("eom_foresight", "12h"))
+
+    def calculate_bids(
+        self,
+        unit: SupportsMinMaxCharge,
+        market_config: MarketConfig,
+        product_tuples: list[Product],
+        **kwargs,
+    ) -> Orderbook:
+        """
+        Calculates EOM bids for a bidirectional EV charging station.
+
+        The method updates the virtual battery SOC at the first product timestep,
+        then calculates charge and discharge bids for each product. For every
+        product, unit.bid_start and unit.bid_end are updated so the unit can apply
+        timestep-specific EV constraints.
+
+        If an EV departs during a product timestep, the strategy prioritizes the
+        required departure SOC:
+        - if SOC is below the departure target, it creates a mandatory charging bid;
+        - if SOC is above the departure target, it creates a mandatory discharging bid;
+        - if SOC already equals the departure target, it creates no bid.
+
+        If no EV departs, the normal flexABLE price logic is used.
+
+        Args:
+            unit (SupportsMinMaxCharge): The EV charging station unit that is dispatched.
+            market_config (MarketConfig): The market configuration.
+            product_tuples (list[Product]): List of market products.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            Orderbook: Bids containing start_time, end_time, only_hours, price, volume, and node.
+        """
+
+        # =============================================================================
+        # Calculate bids
+        # =============================================================================
+        # save a theoretic SOC to calculate the ramping
+        start = product_tuples[0][0]
+        time_delta = unit.index.freq / timedelta(hours=1)
+
+        # Apply EV arrivals at the beginning of the first product timestep
+        # and EV departures from the previous timestep.
+        theoretic_SOC = unit.update_virtual_battery_soc(start)
+
+        previous_power = unit.get_output_before(start)
+
+        bids = []
+        for product in product_tuples:
+            start, end = product[0], product[1]
+
+            # Store the currently evaluated product timestep for EV-specific SOC limits.
+            unit.bid_start, unit.bid_end = start, end
+
+            current_power = unit.outputs["energy"].at[start]
+            current_power_discharge = max(current_power, 0)
+            current_power_charge = min(current_power, 0)
+
+            # calculate min and max power for charging and discharging
+            min_power_charge, max_power_charge = unit.calculate_min_max_charge(
+                start, end, soc=theoretic_SOC
+            )
+            min_power_discharge, max_power_discharge = unit.calculate_min_max_discharge(
+                start, end, soc=theoretic_SOC
+            )
+
+            min_power_charge, max_power_charge = (
+                min_power_charge[0],
+                max_power_charge[0],
+            )
+            min_power_discharge, max_power_discharge = (
+                min_power_discharge[0],
+                max_power_discharge[0],
+            )
+
+            # Calculate ramping constraints using helper function
+            max_power_discharge = unit.calculate_ramp_discharge(
+                theoretic_SOC,
+                previous_power,
+                max_power_discharge,
+                current_power_discharge,
+                min_power_discharge,
+            )
+            min_power_discharge = unit.calculate_ramp_discharge(
+                theoretic_SOC,
+                previous_power,
+                min_power_discharge,
+                current_power_discharge,
+                min_power_discharge,
+            )
+            max_power_charge = unit.calculate_ramp_charge(
+                theoretic_SOC,
+                previous_power,
+                max_power_charge,
+                current_power_charge,
+                min_power_charge,
+            )
+            min_power_charge = unit.calculate_ramp_charge(
+                theoretic_SOC,
+                previous_power,
+                min_power_charge,
+                current_power_charge,
+                min_power_charge,
+            )
+            price_forecast = unit.forecaster[f"price_{market_config.market_id}"]
+
+            # calculate average price
+            average_price = calculate_price_average(
+                current_time=start,
+                foresight=self.foresight,
+                price_forecast=price_forecast,
+            )
+
+            # -------------------------------------------------------------------------
+            # EV departure target logic
+            # -------------------------------------------------------------------------
+
+            if unit.dep_SOC.at[start] > 0:#ToDo: New dependecy unit_output['soc'].at['start'] < 0?
+                # ==============================================================
+                # Case 1: SOC is too low -> mandatory charge
+                # ==============================================================
+                if theoretic_SOC < unit.dep_SOC.at[start] :
+                    required_charge_power = -(
+                            (unit.dep_SOC.at[start]  - theoretic_SOC)
+                            / unit.efficiency_charge
+                            / time_delta
+                    )
+
+                    # Charging is negative.
+                    # max_power_charge is the most negative feasible charging power.
+                    # Choose the feasible charging amount, but not more than required.
+                    bid_quantity = max(required_charge_power, max_power_charge)
+
+                    # Mandatory charge should have high willingness to pay.
+                    price = 300
+
+                # ==============================================================
+                # Case 2: SOC is too high -> mandatory discharge
+                # ==============================================================
+                elif theoretic_SOC > unit.dep_SOC.at[start] :
+                    required_discharge_power = (
+                            (theoretic_SOC - unit.dep_SOC.at[start])
+                            * unit.efficiency_discharge
+                            / time_delta
+                    )
+
+                    # Discharging is positive.
+                    # max_power_discharge is the highest feasible discharge power.
+                    bid_quantity = min(required_discharge_power, max_power_discharge)
+
+                    # Mandatory discharge should have low offer price.
+                    price = 0
+
+                # ==============================================================
+                # Case 3: already exactly at departure target
+                # ==============================================================
+                else:
+                    bid_quantity = 0
+                    price = average_price
+
+            # -------------------------------------------------------------------------
+            # Normal flexABLE price logic if no EV departs
+            # if price is higher than average price, discharge
+            # if price is lower than average price, charge
+            # if price forecast favors discharge, but max discharge is zero, set a bid for charging
+            # -------------------------------------------------------------------------
+            else:
+                if price_forecast[start] > average_price and max_power_discharge:
+                    price = average_price / unit.efficiency_discharge
+                    bid_quantity = max_power_discharge
+                else:
+                    price = average_price * unit.efficiency_charge
+                    bid_quantity = max_power_charge
+
+            bids.append(
+                {
+                    "start_time": start,
+                    "end_time": end,
+                    "only_hours": None,
+                    "price": price,
+                    "volume": bid_quantity,
+                    "node": unit.node,
+                }
+            )
+
+            # calculate theoretic SOC
+            if bid_quantity + current_power > 0:
+                delta_soc = -(
+                    (bid_quantity + current_power)
+                    * time_delta
+                    / unit.efficiency_discharge
+                )
+            elif bid_quantity + current_power < 0:
+                delta_soc = -(
+                    (bid_quantity + current_power) * time_delta * unit.efficiency_charge
+                )
+            else:
+                delta_soc = 0
+
+            theoretic_SOC += delta_soc
+            previous_power = bid_quantity + current_power
+
+        bids = self.remove_empty_bids(bids)
+
+        return bids
+
+    def calculate_reward(
+        self,
+        unit: SupportsMinMaxCharge,
+        marketconfig: MarketConfig,
+        orderbook: Orderbook,
+    ):
+        """
+        Calculates the reward (costs and profit).
+
+        The profit is defined by the cashflow minus the costs.
+
+        Args:
+            unit (SupportsMinMaxCharge): The unit to calculate reward for.
+            marketconfig (MarketConfig): The market configuration.
+            orderbook (Orderbook): The orderbook.
+        """
+        product_type = marketconfig.product_type
+
+        for order in orderbook:
+            start = order["start_time"]
+            # end includes the end of the last product, to get the last products' start time we deduct the frequency once
+            end_excl = order["end_time"] - unit.index.freq
+
+            # Extract outputs and costs in one step
+            outputs = unit.outputs[product_type].loc[start:end_excl]
+            costs = np.where(
+                outputs != 0,
+                np.abs(outputs)
+                * np.array([unit.calculate_marginal_cost(start, x) for x in outputs]),
+                0,
+            )
+
+            unit.outputs["profit"].loc[start:end_excl] = (
+                unit.outputs[f"{product_type}_cashflow"].loc[start:end_excl] - costs
+            )
+            unit.outputs["total_costs"].loc[start:end_excl] = costs
+
 
 class flexablePosCRMStorage(BaseStrategy):
     """

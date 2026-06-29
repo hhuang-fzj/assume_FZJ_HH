@@ -503,6 +503,7 @@ def load_config_and_create_forecaster(
     storage_units = load_file(path=path, config=config, file_name="storage_units")
     demand_units = load_file(path=path, config=config, file_name="demand_units")
     exchange_units = load_file(path=path, config=config, file_name="exchange_units")
+    EVCharging_units = load_file(path=path, config=config, file_name="charging_units")
 
     # Initialize an empty dictionary to combine the DSM units
     dsm_units = {}
@@ -533,6 +534,9 @@ def load_config_and_create_forecaster(
     )
     availability = load_file(
         path=path, config=config, file_name="availability_df", index=index
+    )
+    charging_df = load_file(
+        path=path, config=config, file_name="charging_df", index=index
     )
     # check if availability contains any values larger than 1 and raise a warning
     if availability is not None and availability.max().max() > 1:
@@ -591,6 +595,7 @@ def load_config_and_create_forecaster(
     forecaster.set_forecast(demand_df)
     forecaster.set_forecast(exchanges_df)
     forecaster.set_forecast(availability, prefix="availability_")
+    forecaster.set_forecast(charging_df, prefix="charging_")
     forecaster.set_forecast(fuel_prices_df, prefix="fuel_price_")
     forecaster.calc_forecast_if_needed()
 
@@ -609,6 +614,7 @@ def load_config_and_create_forecaster(
         "exchange_units": exchange_units,
         "dsm_units": dsm_units,
         "forecaster": forecaster,
+        "EVcharging_units" : EVCharging_units,
     }
 
 
@@ -649,6 +655,7 @@ def setup_world(
     exchange_units = scenario_data["exchange_units"]
     dsm_units = scenario_data["dsm_units"]
     forecaster = scenario_data["forecaster"]
+    EVcharging_units = scenario_data["EVcharging_units"]
 
     # save every thousand steps by default to free up memory
     save_frequency_hours = config.get("save_frequency_hours", 48)
@@ -756,6 +763,14 @@ def setup_world(
         learning_mode=learning_config["learning_mode"],
     )
 
+    EVcharging_units = read_units(
+        units_df=EVcharging_units,
+        unit_type="V2G_Charging",
+        forecaster=forecaster,
+        world_bidding_strategies=world.bidding_strategies,
+        learning_mode=learning_config["learning_mode"],
+    )
+
     demand_units = read_units(
         units_df=demand_units,
         unit_type="demand",
@@ -788,6 +803,8 @@ def setup_world(
     for op, op_units in storage_units.items():
         units[op].extend(op_units)
     for op, op_units in demand_units.items():
+        units[op].extend(op_units)
+    for op, op_units in EVcharging_units.items():
         units[op].extend(op_units)
     for op, op_units in exchange_units.items():
         units[op].extend(op_units)

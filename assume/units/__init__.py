@@ -8,6 +8,7 @@ from assume.units.energy_hub import EnergyHub
 from assume.units.exchange import Exchange
 from assume.units.powerplant import PowerPlant
 from assume.units.storage import Storage
+from assume.units.charging_station import V2gChargingRB
 from assume.units.steel_plant import SteelPlant
 from assume.units.steam_generation_plant import SteamPlant
 from assume.units.hydrogen_plant import HydrogenPlant
@@ -25,4 +26,5 @@ unit_types: dict[str, type[BaseUnit]] = {
     "steam_plant": SteamPlant,
     "building": Building,
     "energy_hub": EnergyHub,
+    "V2G_Charging": V2gChargingRB,
 }
