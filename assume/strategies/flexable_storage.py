@@ -167,7 +167,7 @@ class flexableEOMStorage(BaseStrategy):
             theoretic_SOC += delta_soc
             previous_power = bid_quantity + current_power
 
-        bids = self.remove_empty_bids(bids)
+        #bids = self.remove_empty_bids(bids)
 
         return bids
 
@@ -435,7 +435,7 @@ class flexableEOMEV(BaseStrategy):
             theoretic_SOC += delta_soc
             previous_power = bid_quantity + current_power
 
-        bids = self.remove_empty_bids(bids)
+        #bids = self.remove_empty_bids(bids)
 
         return bids
 
