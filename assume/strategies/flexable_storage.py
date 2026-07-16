@@ -419,6 +419,9 @@ class flexableEOMEV(BaseStrategy):
                     "price": price,
                     "volume": bid_quantity,
                     "node": unit.node,
+                    "price_forecast": price_forecast[start],
+                    "average_price":average_price,
+                    "theoretical_soc":theoretic_SOC,
                 }
             )
 

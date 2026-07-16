@@ -745,10 +745,6 @@ class World:
             start_ts (datetime.datetime): The start timestamp for the simulation run.
             end_ts (datetime.datetime): The end timestamp for the simulation run.
         """
-        if sys.gettrace() is not None:
-            install_pycharm_tracing_task_factory()
-        else:
-            print("\n>>>...Run without forced trace...<<<\n")
         logger.debug("activating container")
         # agent is implicit added to self.container._agents
         async with activate(self.container) as c:

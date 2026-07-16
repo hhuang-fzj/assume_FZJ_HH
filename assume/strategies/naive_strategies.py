@@ -189,7 +189,7 @@ class NaiveDADSMStrategy(BaseStrategy):
                     "start_time": start,
                     "end_time": product[1],
                     "only_hours": product[2],
-                    "price": 3000,
+                    "price": 50, #fixme: only for testing
                     "volume": -volume,
                 }
             )
