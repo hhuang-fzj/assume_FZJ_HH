@@ -120,8 +120,20 @@ def load_file(
                 logger.info(f"Downsampling {file_name} successful.")
 
             elif df.index.freq > index.freq or len(df.index) < len(index):
-                logger.warning("Upsampling not implemented yet. Returning None.")
-                return None
+                logger.warning(
+                    f"Upsampling {file_name} from {df.index.freq} to {index.freq}. "
+                    "Method used: append first row as temporary cyclic endpoint, "
+                    "then resample(...).asfreq() and interpolate(method='time')."
+                )
+
+                append_row = df.iloc[[0]].copy()
+                append_row.index = [df.index[-1] + df.index.freq]
+                df_original = df
+
+                df = pd.concat([df, append_row])
+                df = df.resample(index.freq).asfreq()
+                df = df.interpolate(method="time")
+                df = df.iloc[:-1]
 
             df = df.loc[index]
 
