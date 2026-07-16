@@ -5,6 +5,7 @@
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import TypedDict
+from pandas import Timestamp
 
 import numpy as np
 
@@ -288,7 +289,8 @@ class BaseUnit:
             end = order["end_time"]
             # end includes the end of the last product, to get the last products' start time we deduct the frequency once
             end_excl = end - self.index.freq
-
+            # ToDo: Current set up ignore the actual dispatch: If an accepted bid is not diaptached, unit still needs
+            #  to pay
             if isinstance(order["accepted_volume"], dict):
                 cashflow = np.array(
                     [
@@ -341,8 +343,8 @@ class SupportsMinMax(BaseUnit):
     ramp_up: float = None
     efficiency: float
     emission_factor: float
-    min_operating_time: int = 0
-    min_down_time: int = 0
+    min_operating_time: int = 0 #number of timesteps
+    min_down_time: int = 0 #number of timesteps
 
     def calculate_min_max_power(
         self, start: datetime, end: datetime, product_type: str = "energy"
@@ -409,7 +411,7 @@ class SupportsMinMax(BaseUnit):
                 previous_power - self.ramp_down - current_power,
                 self.min_power - current_power,
             )
-        return power
+        return power #returen the difference between current power and max./min. power restricted by power_ramp
 
     def get_operation_time(self, start: datetime) -> int:
         """
@@ -422,7 +424,7 @@ class SupportsMinMax(BaseUnit):
             int: The operation time as a positive integer if operating, or negative if shut down.
         """
         # Set the time window based on max of min operating/down time
-        max_time = max(self.min_operating_time, self.min_down_time, 1)
+        max_time = max(self.min_operating_time, self.min_down_time, 1)#How many timesteps back we might need to inspect
         begin = max(start - self.index.freq * max_time, self.index[0])
         end = start - self.index.freq
 
@@ -437,7 +439,7 @@ class SupportsMinMax(BaseUnit):
         if len(arr) > 0:
             is_off = not arr[0]
         else:
-            is_off = False
+            is_off = False #in order not to block the operation if history is missing
         run = 0
 
         # Count consecutive periods with the same status, break on change
@@ -612,7 +614,7 @@ class SupportsMinMaxCharge(BaseUnit):
             float: The charging power adjusted to the ramping constraints.
         """
 
-        if (
+        if (#storage is discharging in the previous timestep and can not ramp to the neutral state
             previous_power > 0
             and self.calculate_ramp_discharge(previous_power, 0, current_power) > 0
         ):
