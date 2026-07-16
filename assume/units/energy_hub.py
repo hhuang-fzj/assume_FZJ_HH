@@ -89,6 +89,8 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
         self.heating_price = self.forecaster['price_HEAT'] #ToDo: add thermal price forecast
         self.cooling_price = self.forecaster['price_COOL']
         self.co2_price = self.forecaster['price_CO2']#ToDo: add Emission price
+        self.cooling_demand = self.forecaster['dsm_Cooling Demand [MW]']
+        self.heating_demand = self.forecaster['dsm_Heating Demand [MW]']
 
         self.objective = objective
 
@@ -103,6 +105,7 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
                 self.components['chp_CHP_1'].POWER_OUT,
                 self.components['chp_CHP_2'].POWER_OUT,
                 self.components['chp_CHP_3'].POWER_OUT,
+                self.components['compression_chiller_CC'].IN,
                 self.components['grid_Electricity'].CONSUMPTION,
                 self.components['grid_Electricity'].FEEDIN #this is the interface for selling electricity
             ],
@@ -136,14 +139,18 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
         # add expressions to energy system
         for expre in ['investment_costs', 'fixed_costs', 'variable_costs', 'emissions']:
             self.comando_system.add_expression(expre, self.comando_system.aggregate_component_expressions(expre))
+        # implement heat guided operation of the energy_hub
+        sum_heat_output = self.comando_system.aggregate_component_expressions('heat_output')
+        heat_demand = self.comando_system.aggregate_component_expressions("Heating_demand")
+        ac_input = self.comando_system.aggregate_component_expressions("AC_input")
+        self.comando_system.add_le_constraint(sum_heat_output, heat_demand+ac_input, name='heat_guided_operation')
 
     def create_problem(self):
         params = dict()
         index_pd = self.index.as_datetimeindex()
         index_pd_extent = index_pd.append(pd.DatetimeIndex([index_pd[-1] + self.index.freq]))
-        #ToDo: Find a proper way to process the Heating/Cooling demand
-        params['Heating_demand'] = self.demand['Heating Demand[kW]'][:745]
-        params['Cooling_demand'] = self.demand['Cooling Demand [kW]'][:745]
+        params['Heating_demand'] = self.heating_demand.as_pd_series()
+        params['Cooling_demand'] = self.cooling_demand.as_pd_series()
         params['Electricity_price'] = self.electricity_price.as_pd_series()
         params['Gas_price'] = self.natural_gas_price.as_pd_series()
 

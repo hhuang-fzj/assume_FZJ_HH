@@ -73,11 +73,16 @@ class ComandoFacade:
             component_instance = component_class(**grid_data)
             self.components["grid_Gas"] = component_instance
         # Get demands the multi-energy unit needs to cover
-        for energy in self.demand.columns:
-            energy_type = energy.split()[0]
-            component_class = comando_dst['demand']
+        # for energy in self.demand.columns:
+        dsm_demand_forecasts = self.get_dsm_forecasts()
+
+        for forecast_key, forecast_series in dsm_demand_forecasts.items():
+            energy_type = forecast_key.removeprefix("dsm_").split("Demand")[0].strip()
+
+            component_class = comando_dst["demand"]
             component_instance = component_class(energy_type)
-            self.components["demand" + "_" + energy_type] = component_instance
+
+            self.components[f"demand_{energy_type}"] = component_instance
 
 
     def setup_model(self, presolve=True):
@@ -89,10 +94,22 @@ class ComandoFacade:
         self.initialize_components()
         self.initialize_energy_system()#Define the specific connection between components within a unit.
 
-        self.define_constraints()# Define extra constraints for this specific unit.
+        self.define_constraints()# Define extra constraints for this specific unit(Comando System).
 
         self.opt_model = self.create_problem()# Read relevant parameter and create comando problem
 
+    def get_dsm_forecasts(self) -> dict:
+        """
+        Return all DSM-related forecast time series from the forecaster.
+
+        DSM forecasts are identified by the prefix 'dsm_'.
+        The comparison is case-insensitive to avoid issues with capitalization.
+        """
+        return {
+            key: value
+            for key, value in self.forecaster.forecasts.items()
+            if key.lower().startswith("dsm_")
+        }
     def determine_optimal_operation_without_flex(self):
         pass
     def determine_optimal_operation_with_flex(self):#ToDo: rename the function in strategy
@@ -120,7 +137,9 @@ class ComandoFacade:
         )
         if self.opt_model.SolCount > 0:
             # Plot timeseries of variables from gurobi result as the user choose
-            interactive_timeseries_plot(self.opt_model)
+            # interactive_timeseries_plot(self.opt_model,self.index)
+            # raise SystemExit("Stopping simulation here")#Fixme: Only for review the result
+            pass
         else:
             print("No feasible solution found. Status:", self.opt_model.Status)
         print("Solving...")

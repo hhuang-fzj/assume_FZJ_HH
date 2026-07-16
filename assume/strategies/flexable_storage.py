@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 from datetime import timedelta
+from datetime import datetime
 
 import numpy as np
 
@@ -273,10 +274,7 @@ class flexableEOMEV(BaseStrategy):
         # save a theoretic SOC to calculate the ramping
         start = product_tuples[0][0]
         time_delta = unit.index.freq / timedelta(hours=1)
-
-        # Apply EV arrivals at the beginning of the first product timestep
-        # and EV departures from the previous timestep.
-        theoretic_SOC = unit.update_virtual_battery_soc(start)
+        theoretic_SOC = unit.outputs["soc"].at[start]
 
         previous_power = unit.get_output_before(start)
 
@@ -287,6 +285,9 @@ class flexableEOMEV(BaseStrategy):
             # Store the currently evaluated product timestep for EV-specific SOC limits.
             unit.bid_start, unit.bid_end = start, end
 
+            # Apply EV arrivals at the beginning of this timestep
+            # and departures from the previous timestep.
+            theoretic_SOC = unit.update_virtual_battery_soc(start, theoretic_SOC)
             current_power = unit.outputs["energy"].at[start]
             current_power_discharge = max(current_power, 0)
             current_power_charge = min(current_power, 0)
@@ -350,7 +351,7 @@ class flexableEOMEV(BaseStrategy):
             # EV departure target logic
             # -------------------------------------------------------------------------
 
-            if unit.dep_SOC.at[start] > 0:#ToDo: New dependecy unit_output['soc'].at['start'] < 0?
+            if unit.dep_SOC.at[start] > 0:
                 # ==============================================================
                 # Case 1: SOC is too low -> mandatory charge
                 # ==============================================================
@@ -394,18 +395,21 @@ class flexableEOMEV(BaseStrategy):
                     price = average_price
 
             # -------------------------------------------------------------------------
-            # Normal flexABLE price logic if no EV departs
             # if price is higher than average price, discharge
             # if price is lower than average price, charge
-            # if price forecast favors discharge, but max discharge is zero, set a bid for charging
+            # in other cases no bids
             # -------------------------------------------------------------------------
             else:
                 if price_forecast[start] > average_price and max_power_discharge:
                     price = average_price / unit.efficiency_discharge
                     bid_quantity = max_power_discharge
-                else:
+                elif price_forecast[start] < average_price and max_power_charge:
                     price = average_price * unit.efficiency_charge
                     bid_quantity = max_power_charge
+
+                else:
+                    price = 0
+                    bid_quantity = 0
 
             bids.append(
                 {
