@@ -26,6 +26,7 @@ from assume.strategies.naive_strategies import (
 from assume.strategies.manual_strategies import SimpleManualTerminalStrategy
 from assume.strategies.dmas_powerplant import DmasPowerplantStrategy
 from assume.strategies.dmas_storage import DmasStorageStrategy
+from assume.strategies.dms_chargingstation import DmasV2gStrategy
 from assume.strategies.portfolio_strategies import (
     UnitOperatorStrategy,
     DirectUnitOperatorStrategy,
@@ -59,6 +60,7 @@ bidding_strategies: dict[str, type[BaseStrategy | UnitOperatorStrategy]] = {
     "dmas_storage": DmasStorageStrategy,
     "cournot_portfolio": CournotPortfolioStrategy,
     "default_portfolio": DirectUnitOperatorStrategy,
+    "dmas_charging_station" : DmasV2gStrategy,
 }
 
 try:
