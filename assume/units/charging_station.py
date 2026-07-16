@@ -8,6 +8,9 @@ from functools import lru_cache
 
 import numpy as np
 
+from assume.common.base import BaseUnit
+from assume.common.market_objects import MarketConfig, Orderbook
+
 from assume.common.base import SupportsMinMaxCharge
 from assume.common.fast_pandas import FastSeries
 from assume.common.forecasts import Forecaster
@@ -180,6 +183,22 @@ class V2gChargingRB(SupportsMinMaxCharge):
         self.bid_start = self.index[0]
         self.bid_end = self.index[1]
 
+    def set_dispatch_plan(
+            self,
+            marketconfig:MarketConfig,
+            orderbook:Orderbook,
+    ) -> None:
+        """
+        Set accepted dispatch for the EV charging station.
+
+        This intentionally bypasses SupportsMinMaxCharge.set_dispatch_plan(),
+        because that method updates SOC with normal storage logic.
+
+        For V2gChargingRB, SOC is updated only in execute_current_dispatch()
+        using EV-specific arrival/departure logic.
+        """
+
+        BaseUnit.set_dispatch_plan(self, marketconfig, orderbook)
     def execute_current_dispatch(self, start: datetime, end: datetime) -> np.ndarray:
         """
         Executes the current dispatch of the unit based on the provided timestamps.
