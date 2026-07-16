@@ -5,6 +5,7 @@
 import logging
 from datetime import datetime, timedelta
 from functools import lru_cache
+from pandas import Timestamp
 
 import numpy as np
 
@@ -217,8 +218,10 @@ class V2gChargingRB(SupportsMinMaxCharge):
         time_delta = self.index.freq / timedelta(hours=1)
 
         for t in self.index[start:end]:
+            next_freq = t + self.index.freq
             current_power = self.outputs["energy"].at[t]
-
+            self.bid_start = t
+            self.bid_end = next_freq
             # adjust power to constraints of the unit
             if current_power > self.max_power_discharge:
                 current_power = self.max_power_discharge
@@ -233,7 +236,11 @@ class V2gChargingRB(SupportsMinMaxCharge):
 
             # calculate the change in state of charge
             delta_soc = 0
-            soc = self.outputs["soc"].at[t]
+            soc = self.update_virtual_battery_soc(
+                start=t,
+                soc=self.outputs["soc"].at[t],
+                write_output=True,
+            )
 
             # discharging
             if current_power > 0:
@@ -254,7 +261,7 @@ class V2gChargingRB(SupportsMinMaxCharge):
                 delta_soc = -current_power * time_delta * self.efficiency_charge
 
             # update the values of the state of charge and the energy
-            next_freq = t + self.index.freq
+
             if next_freq in self.index:
                 self.outputs["soc"].at[next_freq] = soc + delta_soc
             self.outputs["energy"].at[t] = current_power
@@ -556,7 +563,12 @@ class V2gChargingRB(SupportsMinMaxCharge):
 
         return unit_dict
 
-    def update_virtual_battery_soc(self, start):
+    def update_virtual_battery_soc(
+            self,
+            start: datetime,
+            soc:float,
+            write_output: bool = False,
+    ):
         """
         Updates the SOC according to EV arrivals and departures.
 
@@ -567,23 +579,23 @@ class V2gChargingRB(SupportsMinMaxCharge):
 
         Args:
             start (datetime.datetime): The current simulation timestep.
+            soc (float): The current theoretical state of charge in MWh.
 
         Returns:
             float: The updated state of charge in MWh.
         """
 
-        theoretic_SOC = self.outputs["soc"].at[start]
         arrive_energy = self.arr_SOC.at[start]
-        leave_energy = self.dep_SOC.at[start-self.index.freq]
 
+        previous_timestep = start - self.index.freq
+        leave_energy = 0
 
-        if arrive_energy:
-            updated_soc = theoretic_SOC + arrive_energy
+        if previous_timestep in self.dep_SOC.index:
+            leave_energy = self.dep_SOC.at[previous_timestep]
+
+        updated_soc = soc + arrive_energy - leave_energy
+
+        if write_output:
             self.outputs["soc"].at[start] = updated_soc
-        elif leave_energy :
-            updated_soc = theoretic_SOC - leave_energy
-            self.outputs["soc"].at[start] = updated_soc
-        else:
-            updated_soc = theoretic_SOC
 
-        return updated_soc
+        return round(updated_soc, 8)
