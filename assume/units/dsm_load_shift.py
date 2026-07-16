@@ -157,6 +157,7 @@ class DSMFlex:
         else:
             raise ValueError(f"Unknown objective: {self.objective}")
 
+    #Functions utilizing the flexiblity maps to adjust the pyo.obj
     def electricity_price_signal(self, model):
         """
         Determine the optimal operation using a new electricity price signal.
@@ -645,6 +646,7 @@ class DSMFlex:
 
             return maximise_renewable_utilisation
 
+    #Functions to call the optimization
     def determine_optimal_operation_without_flex(self, switch_flex_off=True):
         """
         Determines the optimal operation of the steel plant without considering flexibility.
@@ -773,6 +775,7 @@ class DSMFlex:
             index=self.index, value=flex_variable_cost
         )
 
+    #Support functions for determine_optimal_operation()
     def switch_to_opt(self, instance):
         """
         Switches the instance to solve a cost based optimisation problem by deactivating the flexibility constraints and objective.
@@ -822,6 +825,7 @@ class DSMFlex:
     def calculate_marginal_cost(self, start: datetime, power: float) -> float:
         """
         Calculates the marginal cost of operating the building unit at a specific time and power level.
+        (Mainly for learning strategy and demonstration.)
 
         The marginal cost represents the additional cost incurred by increasing the power output by one unit.
 

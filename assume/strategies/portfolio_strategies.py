@@ -53,7 +53,7 @@ class UnitOperatorStrategy:
 
         total_capacity = {}
 
-        for unit in units_operator.units.values():
+        for unit in units_operator.units.values():#todo: have a look into total_capacity
             for market_id in unit.bidding_strategies.keys():
                 total_capacity[market_id] = total_capacity.get(market_id, {})
                 total_capacity[market_id][unit.technology] = (

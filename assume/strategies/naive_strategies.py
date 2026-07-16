@@ -170,6 +170,7 @@ class NaiveDADSMStrategy(BaseStrategy):
         """
 
         # check if unit has opt_power_requirement attribute
+        #ToDo: Do we really need an optimization to check that?
         if unit.optimisation_counter == 0:
             unit.determine_optimal_operation_with_flex()
             unit.optimisation_counter = 1

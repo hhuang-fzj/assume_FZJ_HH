@@ -261,10 +261,13 @@ class PowerPlant(SupportsMinMax):
             The calculation does not include ramping constraints and can be used for arbitrary start times in the future.
         """
         # end includes the end of the last product, to get the last products' start time we deduct the frequency once
+        # Fixme: product_type is ignored
         end_excl = end - self.index.freq
 
+        # 0, in the first iteration, help to calculate remaning capacity after dispatch plan, e.g during intra-Day
+        # calculation with a day-ahead dispatch plan
         base_load = self.outputs["energy"].loc[start:end_excl]
-        heat_demand = self.outputs["heat"].loc[start:end_excl]
+        heat_demand = self.outputs["heat"].loc[start:end_excl]#ToDo: Check the relation with heat extraction
         capacity_neg = self.outputs["capacity_neg"].loc[start:end_excl]
 
         # needed minimum + capacity_neg - what is already sold is actual minimum

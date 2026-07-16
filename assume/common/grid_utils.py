@@ -24,12 +24,12 @@ def add_generators(
     """
     p_set = pd.DataFrame(
         np.zeros((len(network.snapshots), len(generators.index))),
-        index=network.snapshots,
+        index=network.snapshots,# Network timesteps
         columns=generators.index,
     )
 
     if isinstance(generators, dict):
-        gen_c = generators.copy()
+        gen_c = generators.copy()#fixme: determine whether gen_c should be dict() or pd.Dataframe()
 
         if "p_min_pu" not in gen_c.columns:
             gen_c["p_min_pu"] = p_set
@@ -98,7 +98,7 @@ def add_redispatch_generators(
         sign=1,
     )
 
-    # add upward redispatch generators
+    # add upward redispatch generators/capacities
     network.add(
         "Generator",
         name=generators.index,
@@ -110,7 +110,7 @@ def add_redispatch_generators(
         marginal_cost=p_set,
     )
 
-    # add downward redispatch generators
+    # add downward redispatch generators/capacities
     network.add(
         "Generator",
         name=generators.index,
