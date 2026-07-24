@@ -12,7 +12,7 @@ class ComandoFacade:
     def __init__(self, components, **kwargs):
         super().__init__(**kwargs)
         self.components = components
-        self.demand = kwargs['demand']#ToDo: move this to energy hub, it is not general feature of a COMANDO Unit
+        #self.demand = kwargs['demand']#ToDo: move this to energy hub, it is not general feature of a COMANDO Unit
 
     def initialize_components(self):
         """
@@ -52,7 +52,7 @@ class ComandoFacade:
                     self.components[technology + "_" + component_data['label']] = component_instance
                     feuls.append(component_data['fuel_type'])
         #Add ancillary components: grids, demands
-        #Get the electrical bidirectional grid interface
+        #Get bidirectional electricity grid interface
         grid_data = {
             'label': 'Electricity',
             'compensation': 0.02,#ToDo: Update this value with the market clearing result
@@ -63,6 +63,19 @@ class ComandoFacade:
         component_class = comando_dst['grid']
         component_instance = component_class(**grid_data)
         self.components["grid_Electricity"] = component_instance
+
+        # Get the bidirectional heat grid interface
+        ht_grid_data = {
+            'label': 'HT_Heat',
+            'compensation': 0.02,
+            'co2_factor': 0,
+            'constrain_flow': True,
+            'feedin_limit': None,
+        }
+        component_class = comando_dst['grid']
+        component_instance = component_class(**ht_grid_data)
+        self.components["grid_HT_Heat"] = component_instance
+
         #Get other energy sources for multi-energy unit depending on the fuels they need
         if 'gas' in feuls:
             grid_data = {
@@ -73,10 +86,8 @@ class ComandoFacade:
             component_class = comando_dst['grid']
             component_instance = component_class(**grid_data)
             self.components["grid_Gas"] = component_instance
-        # Get demands the multi-energy unit needs to cover
-        # for energy in self.demand.columns:
-        dsm_demand_forecasts = self.get_dsm_forecasts()
 
+        dsm_demand_forecasts = self.get_dsm_forecasts()
         for forecast_key, forecast_series in dsm_demand_forecasts.items():
             energy_type = forecast_key.removeprefix("dsm_").split("Demand")[0].strip()
 
@@ -139,8 +150,8 @@ class ComandoFacade:
         )
         if self.opt_model.SolCount > 0:
             # Plot timeseries of variables from gurobi result as the user choose
-            # interactive_timeseries_plot(self.opt_model,self.index)
-            # raise SystemExit("Stopping simulation here")#Fixme: Only for review the result
+            interactive_timeseries_plot(self.opt_model,self.index)
+            raise SystemExit("Stopping simulation here")#Fixme: Only for review the result
             pass
         else:
             print("No feasible solution found. Status:", self.opt_model.Status)

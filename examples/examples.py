@@ -109,6 +109,10 @@ available_examples = {
     "LLEC_2024_with_comando_DSM": {
         "scenario": "LLEC",
         "study_case": "LLEC_2024_with_DSM",
+    },
+    "LLEC_2024_multi_energy_market": {
+        "scenario": "LLEC",
+        "study_case": "LLEC_2024_multi_energy",
     }
 }
 

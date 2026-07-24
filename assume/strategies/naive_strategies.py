@@ -183,7 +183,10 @@ class NaiveDADSMStrategy(BaseStrategy):
             """
             start = product[0]
 
-            volume = unit.opt_power_requirement.at[start]
+            if market_config['market_id'] == 'LLEC':
+                volume = unit.opt_power_requirement.at[start]
+            elif market_config['market_id'] == 'HTH':
+                volume = unit.opt_power_requirement.at[start]#ToDo: Change to new feature of the unit
 
             bids.append(
                 {

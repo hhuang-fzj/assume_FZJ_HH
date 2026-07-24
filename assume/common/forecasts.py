@@ -227,9 +227,9 @@ class CsvForecaster(Forecaster):
     def calculate_market_forecasts(self):
         """Calculate market-specific price and residual load forecasts."""
         for market_id, config in self.market_configs.items():
-            if config["product_type"] != "energy":
+            if config["product_type"] not in ["energy"]:# ,"HT_heat"
                 self.logger.warning(
-                    f"Price forecast could not be calculated for {market_id}. It can only be calculated for energy-only markets for now."
+                    f"Price forecast could not be calculated for {market_id}."
                 )
                 continue
 
