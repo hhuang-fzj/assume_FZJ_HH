@@ -1,7 +1,8 @@
 from assume.common.fast_pandas import FastSeries
 from assume.units.comando_components import comando_dst
-from assume.common.temp_gurobi_visulize import interactive_timeseries_plot# temperary plot function for gurobi model
-# results
+from assume.common.temp_gurobi_visulize import interactive_timeseries_plot
+from assume.common.gurobi_diagnoser import optimize_and_diagnose
+# temperary plot function for gurobi model results
 
 # import pickle
 # import os
@@ -98,6 +99,7 @@ class ComandoFacade:
 
         self.opt_model = self.create_problem()# Read relevant parameter and create comando problem
 
+        #status = optimize_and_diagnose(self.opt_model)
     def get_dsm_forecasts(self) -> dict:
         """
         Return all DSM-related forecast time series from the forecaster.
@@ -112,9 +114,9 @@ class ComandoFacade:
         }
     def determine_optimal_operation_without_flex(self):
         pass
-    def determine_optimal_operation_with_flex(self):#ToDo: rename the function in strategy
+    def determine_optimal_operation_with_flex(self):
+        #ToDo: rename the function in strategy
         # ToDo: Update the electricity price in rolling horizon mode
-        # ToDo: ASSUME is working with MWh, check the unit during market clearing
 
         print("Solving...")
         options = dict(  # Options assuming Gurobi 9.1.1
@@ -129,7 +131,7 @@ class ComandoFacade:
             self.opt_model.getVarByName(f"Electricity_consumption[{t}]").X
             - self.opt_model.getVarByName(f"Electricity_feedin[{t}]").X
             for t in range(len(self.index))
-        ]
+        ]#ToDo: Add for Heat Market
 
         self.opt_power_requirement = FastSeries(
             index=self.index,
