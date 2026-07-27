@@ -152,4 +152,4 @@ examples/inputs/*
 *.jar
 fameSetup.yaml
 
-assume/units/comando_units
+assume/units/comando_components.py
