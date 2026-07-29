@@ -141,7 +141,7 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
         # add expressions to energy system
         for expre in ['investment_costs', 'fixed_costs', 'variable_costs', 'emissions']:
             self.comando_system.add_expression(expre, self.comando_system.aggregate_component_expressions(expre))
-        # implement heat guided operation of the energy_hub
+        # implement heat guided operation of the energy_hub, comment out for heat market operation
         # sum_heat_output = self.comando_system.aggregate_component_expressions('heat_output')
         # heat_demand = self.comando_system.aggregate_component_expressions("Heating_demand")
         # ac_input = self.comando_system.aggregate_component_expressions("AC_input")

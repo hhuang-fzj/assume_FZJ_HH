@@ -182,18 +182,19 @@ class NaiveDADSMStrategy(BaseStrategy):
             and the volume of the product. Dispatch the order to the market.
             """
             start = product[0]
-
-            if market_config['market_id'] == 'LLEC':
-                volume = unit.opt_power_requirement.at[start]
-            elif market_config['market_id'] == 'HTH':
-                volume = unit.opt_power_requirement.at[start]#ToDo: Change to new feature of the unit
-
+            price = 0
+            if market_config.market_id == 'LLEC':
+                volume = unit.opt_power_volume.at[start]
+                price = 50
+            elif market_config.market_id == 'HTH':
+                volume = unit.opt_HT_heat_volume.at[start]
+                price = 93.7
             bids.append(
                 {
                     "start_time": start,
                     "end_time": product[1],
                     "only_hours": product[2],
-                    "price": 50, #fixme: only for testing
+                    "price": price,
                     "volume": -volume,
                 }
             )

@@ -55,7 +55,7 @@ class ComandoFacade:
         #Get bidirectional electricity grid interface
         grid_data = {
             'label': 'Electricity',
-            'compensation': 0.02,#ToDo: Update this value with the market clearing result
+            'compensation': 50,#ToDo: Update this value with the market clearing result
             'co2_factor': 0,
             'constrain_flow': True,
             'feedin_limit': None,
@@ -67,7 +67,7 @@ class ComandoFacade:
         # Get the bidirectional heat grid interface
         ht_grid_data = {
             'label': 'HT_Heat',
-            'compensation': 0.02,
+            'compensation': 93.7,
             'co2_factor': 0,
             'constrain_flow': True,
             'feedin_limit': None,
@@ -127,7 +127,7 @@ class ComandoFacade:
         pass
     def determine_optimal_operation_with_flex(self):
         #ToDo: rename the function in strategy
-        # ToDo: Update the electricity price in rolling horizon mode
+        #ToDo: Update the price in rolling horizon mode
 
         print("Solving...")
         options = dict(  # Options assuming Gurobi 9.1.1
@@ -138,20 +138,30 @@ class ComandoFacade:
             OutputFlag=1,
         )
         self.opt_model.solve(**options)
-        opt_power_requirement = [
+        opt_power_volume = [
             self.opt_model.getVarByName(f"Electricity_consumption[{t}]").X
             - self.opt_model.getVarByName(f"Electricity_feedin[{t}]").X
             for t in range(len(self.index))
-        ]#ToDo: Add for Heat Market
+        ]
+        opt_HT_heat_volume = [
+            self.opt_model.getVarByName(f"HT_Heat_consumption[{t}]").X
+            - self.opt_model.getVarByName(f"HT_Heat_feedin[{t}]").X
+            for t in range(len(self.index))
+        ]
 
-        self.opt_power_requirement = FastSeries(
+
+        self.opt_power_volume = FastSeries(
             index=self.index,
-            value=opt_power_requirement,
+            value=opt_power_volume,
+        )
+        self.opt_HT_heat_volume = FastSeries(
+            index=self.index,
+            value=opt_HT_heat_volume,
         )
         if self.opt_model.SolCount > 0:
             # Plot timeseries of variables from gurobi result as the user choose
-            interactive_timeseries_plot(self.opt_model,self.index)
-            raise SystemExit("Stopping simulation here")#Fixme: Only for review the result
+            # interactive_timeseries_plot(self.opt_model,self.index)
+            # raise SystemExit("Stopping simulation here")#Fixme: Only for review the result
             pass
         else:
             print("No feasible solution found. Status:", self.opt_model.Status)
