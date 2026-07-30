@@ -580,6 +580,158 @@ class Demand(Component):
         self.add_expression(label+'_'+'demand', demand)
         self.add_input('IN', demand)
 
+class Source(Component):
+    """ Simple Source component for the Jupiter computer
+        with a maximum Qdot of 11 MW. Very simplified model
+        which is based on the assumption that Jupiter is operating
+        at full load and need always 13 MW of electricity.
+
+        ---------
+        design variables: none
+        operational variable: heat output
+
+        """
+
+    Q_dot_max = 11 # MW
+
+    def __init__(self, label):
+        super().__init__(label=label)
+
+        self.make_parameter('T_out', value=None)
+        self.make_parameter('T_in', value=None)
+        self.make_parameter('Electric_consumption', value=13)
+        self.make_operational_variable(name="q_dot", bounds=(0, None))
+        self.add_le_constraint(self["q_dot"],self.Q_dot_max)
+        self.add_output('HEAT_OUT', self["q_dot"])
+        self.add_input('EL_IN', self['Electric_consumption'])
+
+class HeatPump(IESComponent):
+    """Heat pump (HP) parameterized as in Sass.
+
+    Arguments
+    ---------
+    use_part_load : bool
+        Specifies whether the detailed part load behaviour acc to Fuentes is used.
+        If True, the detailed part load behaviour is used and use_pwlm is set to True.
+        If False, a linear function for the efficiency is used and use_pwlm is set to False.
+    use_lorenz : bool
+        Specifies whether the Lorenz or the Carnot COP is used.
+        If True, Lorenz COP is used.
+        If False, Carnot COP is used.
+    ---------
+    design variable: nominal heating power to be installed
+    operational variable: operational output heating for each time step
+    costs: The investment costs 'c_inv' is a nonlinear function of the nominal output Qdot_nom:
+        c_inv = c_inv,ref * (Qdot_nom/Qdot_ref)^M
+    input-output: Input determined via the efficiency relation
+        P_IN =  Qdot_out / (eff * COP)
+    The efficiency 'eff' is determined via the product of the nominal
+    efficiency and a polynomial fitting function of the load fraction 'q'
+    q = Qdot_out/Qdot_nom.
+    The COP is determined via the Lorenz COP or via the Carnot COP.
+    """
+
+    Qdot_ref = 5.7  # [MW], reference nominal output.
+
+    M = 1  # [-], cost exponent
+    c_ref = 700 * 1000 * Qdot_ref  # [€], reference cost. Investmentcost of 700 € / kWp. Estimated acc. to Pieper et al.
+    c_m = 0.01  # [-], maintenance coefficient, (fraction of investment cost)
+    Qdot_min = Qdot_ref  # [MW], minimal nominal power allowed for the model; if exist = True this value have to be set = Qdot_ref
+    Qdot_max = Qdot_ref  # [MW], maximal nominal power allowed for the model
+
+    def __init__(self, label, T_eva_out, T_m_eva, T_con_out, T_m_con, use_part_load=False, use_lorenz=True):
+
+        C_d = 0.22
+        C_c = 0.98
+
+        if use_part_load:
+            qdot_min = 0.05  # [-] minimum modeled thermal output part load
+            fit_params_nom = {1: 1 - C_d,
+                              2: C_d}
+            fit_params_den = {0: C_d * C_c - C_d - C_c + 1,
+                              1: -2 * C_d * C_c + 2 * C_d + C_c,
+                              2: C_d * C_c - C_d}
+            use_pwlm = True
+        else:
+            qdot_min = 0.05  # [-] minimum modeled thermal output part load
+            fit_params_nom = {0: 0.725, 1: 0.275}
+            fit_params_den = {0: 1}
+            # fit_params_nom = {0: 1}
+            # fit_params_den = {0: 1}
+            use_pwlm = False
+
+        if use_lorenz:
+            # Calculate temperature dependent COP using Lorenz
+            eff_lorenz = 0.5  # estimated for lorenz
+            # T_m_con = (T_con_in - T_con_out) / (np.log(T_con_in) - np.log(T_con_out))
+            # T_m_eva = (T_eva_in - T_eva_out) / (np.log(T_eva_in) - np.log(T_eva_out))
+            COP_lorenz = T_m_con / (T_m_con - T_m_eva)
+            COP = eff_lorenz * COP_lorenz
+        else:
+            # Calculate temperature dependent COP using Carnot
+            eff_exer = 0.5  # TODO: re-evalute eff_exer for carnot, if carnot should be used
+            COP_carnot = T_con_out / (T_con_out - T_eva_out)
+            COP = eff_exer * COP_carnot
+
+        super().__init__(label, nom_ref=self.Qdot_ref, c_ref=self.c_ref, c_m=self.c_m, M=self.M,
+                         nom_min=self.Qdot_min, nom_max=self.Qdot_max, min_part_load=qdot_min,
+                         base_eff=1, fit_params_den=fit_params_den, fit_params_nom=fit_params_nom,
+                         in_name='P_in', out_name='Qdot_out',
+                         exists=True, optional=False, use_pwlm=use_pwlm, pwlm_breakpoints=4)
+
+        inp = self.get_expression('input')
+        out = self.get_expression('output')
+        eff = self.get_expression('eff')
+        self.add_eq_constraint(inp * COP * eff, out, 'input_output_relation')
+
+        # Possible adjustments for connection to Jupiter computer
+        heat_in = self.make_operational_variable('heat_in', bounds=(0,None))
+        self.add_eq_constraint(heat_in + inp, out, 'energy_balance')
+        self.add_input('Qdot_in', heat_in)
+
+    def add_model(self, pwlm, name, input_vars, output_var, op_var=1):
+        """ Add a model"""
+        var_mapping = {}  # Mapping to ensure that no name collision happens if more than model is used in one component
+        for var in pwlm["variables"]:
+            var_mapping[var.name] = self.make_operational_variable(name + var.name, bounds=pwlm["bounds"][var])
+        bin_var_mapping = {}  # mapping for binary variables
+        for bin_var in pwlm["bin_var"]:
+            bin_var_mapping[bin_var.name] = self.make_operational_variable(name + bin_var.name, domain=INTEGER,
+                                                                           bounds=(0, 1))
+
+        input_mapping = {}
+        if type(pwlm["inputs"]) is list:
+            for i in range(pwlm["inputs"].__len__()):
+                input_mapping[pwlm["inputs"][i].name] = input_vars[i]
+        else:
+            input_mapping[pwlm["inputs"].name] = input_vars
+
+        for con in pwlm["constraints"]:
+            con_comando = con.subs(var_mapping)
+            con_comando = con_comando.subs(bin_var_mapping)
+            con_comando = con_comando.subs(input_mapping)
+            con_comando = con_comando.subs(pwlm["output"], output_var)
+            con_comando = con_comando.subs(pwlm["op_status"], op_var)
+
+            if type(con) is comando.get_backend().Equality:
+                name_con = f'{name}{con.args[0]} = {con.args[1]}'
+                con_type = 'Eq'
+            elif type(con) is comando.get_backend().LessThan:
+                name_con = f'{name}{con.args[0]} <= {con.args[1]}'
+                con_type = 'Le'
+            elif type(con) is comando.get_backend().GreaterThan:
+                name_con = f'{name}{con.args[0]} >= {con.args[1]}'
+                con_type = 'Ge'
+            else:
+                name_con = 'UNDEFINED TYPE'
+            try:
+                self._handle_constraint(con_type, con_comando.lhs, con_comando.rhs, name_con)
+            except AttributeError:
+                if con_comando:
+                    print(f'constraint {name_con} is always satisfied and is therefore skipped')
+                elif not con_comando:
+                    print(f'constraint {name_con} is always violated')
+
 comando_dst : dict = {
     "chp" : CombinedHeatAndPower,
     "boiler" : Boiler,
@@ -587,4 +739,6 @@ comando_dst : dict = {
     "grid" : Grid,
     "compression_chiller" : CompressionChiller,
     "demand": Demand,
+    "HPC" : Source,
+    "heat_pump" : HeatPump,
 }
