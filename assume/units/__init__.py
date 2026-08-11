@@ -5,6 +5,7 @@
 from assume.common.base import BaseUnit
 from assume.units.demand import Demand
 from assume.units.energy_hub import EnergyHub
+from assume.units.waste_heat_recovery import WasteHeatRecovery
 from assume.units.exchange import Exchange
 from assume.units.powerplant import PowerPlant
 from assume.units.storage import Storage
@@ -27,4 +28,5 @@ unit_types: dict[str, type[BaseUnit]] = {
     "building": Building,
     "energy_hub": EnergyHub,
     "V2G_Charging": V2gChargingRB,
+    "waste_heat_recovery": WasteHeatRecovery,
 }

@@ -592,16 +592,15 @@ class Source(Component):
 
         """
 
-    Q_dot_max = 11 # MW
 
-    def __init__(self, label):
+    def __init__(self, label,**kwargs,):
         super().__init__(label=label)
-
+        self.Q_dot_max = kwargs['max_power']
         self.make_parameter('T_out', value=None)
         self.make_parameter('T_in', value=None)
-        self.make_parameter('Electric_consumption', value=13)
+        self.make_parameter('Electric_consumption', value=kwargs['min_power'])#ToDo: add the tag elc_consumption
         self.make_operational_variable(name="q_dot", bounds=(0, None))
-        self.add_le_constraint(self["q_dot"],self.Q_dot_max)
+        self.add_le_constraint(self["q_dot"],self.Q_dot_max)#ToDo: Check the relation heat_output & Elec_consumption
         self.add_output('HEAT_OUT', self["q_dot"])
         self.add_input('EL_IN', self['Electric_consumption'])
 
@@ -631,18 +630,25 @@ class HeatPump(IESComponent):
     The COP is determined via the Lorenz COP or via the Carnot COP.
     """
 
-    Qdot_ref = 5.7  # [MW], reference nominal output.
+    def __init__(self,
+                 label,
+                 T_m_eva=None,
+                 T_m_con=None,
+                 use_part_load=False,
+                 use_lorenz=False,
+                 **kwargs,):
 
-    M = 1  # [-], cost exponent
-    c_ref = 700 * 1000 * Qdot_ref  # [€], reference cost. Investmentcost of 700 € / kWp. Estimated acc. to Pieper et al.
-    c_m = 0.01  # [-], maintenance coefficient, (fraction of investment cost)
-    Qdot_min = Qdot_ref  # [MW], minimal nominal power allowed for the model; if exist = True this value have to be set = Qdot_ref
-    Qdot_max = Qdot_ref  # [MW], maximal nominal power allowed for the model
-
-    def __init__(self, label, T_eva_out, T_m_eva, T_con_out, T_m_con, use_part_load=False, use_lorenz=True):
-
-        C_d = 0.22
-        C_c = 0.98
+        C_d = kwargs["C_d"]
+        C_c = kwargs["C_c"]
+        T_con_out = kwargs["T_con_in"]
+        T_eva_out = kwargs["T_eva_out"]
+        eff_exer = kwargs["eff_COP"]
+        self.Qdot_ref = kwargs["max_power"]
+        self.Qdot_min = self.Qdot_ref   # [MW], minimal nominal power allowed for the model; if exist = True this value have to be set = Qdot_ref
+        self.Qdot_max = self.Qdot_ref   # [MW], maximal nominal power allowed for the model
+        self.M = kwargs["cost_exponent"]
+        self.c_ref = kwargs["c_ref"]
+        self.c_m = kwargs["c_m"]
 
         if use_part_load:
             qdot_min = 0.05  # [-] minimum modeled thermal output part load
@@ -669,7 +675,7 @@ class HeatPump(IESComponent):
             COP = eff_lorenz * COP_lorenz
         else:
             # Calculate temperature dependent COP using Carnot
-            eff_exer = 0.5  # TODO: re-evalute eff_exer for carnot, if carnot should be used
+            # TODO: re-evalute eff_exer for carnot, if carnot should be used
             COP_carnot = T_con_out / (T_con_out - T_eva_out)
             COP = eff_exer * COP_carnot
 
@@ -739,6 +745,6 @@ comando_dst : dict = {
     "grid" : Grid,
     "compression_chiller" : CompressionChiller,
     "demand": Demand,
-    "HPC" : Source,
+    "hpc" : Source,
     "heat_pump" : HeatPump,
 }

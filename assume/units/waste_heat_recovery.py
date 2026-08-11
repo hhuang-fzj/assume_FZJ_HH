@@ -22,7 +22,7 @@ class WasteHeatRecovery(ComandoFacade, SupportsMinMax):
 
     # Required and optional technologies for the steel plant
     required_technologies = []
-    optional_technologies = ["HPC", "heatpump"]
+    optional_technologies = ["hpc", "heat_pump"]
 
     def __init__(
             self,
@@ -31,7 +31,7 @@ class WasteHeatRecovery(ComandoFacade, SupportsMinMax):
             bidding_strategies: dict,
             forecaster: Forecaster,
             components: dict[str, dict] = None,
-            technology: str = "energy_hub",
+            technology: str = "waste_heat_recovery",
             objective: str = "min_variable_cost",
             **kwargs,
     ):
@@ -76,19 +76,19 @@ class WasteHeatRecovery(ComandoFacade, SupportsMinMax):
 
         conns = {
             'Power_Bus': [
-                self.components['HPC'].POWER_IN,
-                self.components['heat_pump'].POWER_IN,
+                self.components['hpc_JUHPC'].EL_IN,
+                self.components['heat_pump_HP'].IN,
                 self.components['grid_Electricity'].CONSUMPTION,
                 self.components['grid_Electricity'].FEEDIN #this is the interface for selling electricity
             ],
             'HT_Heat_Bus': [
-                self.components['heat_pump'].HEAT_OUT,
+                self.components['heat_pump_HP'].OUT,
                 self.components['grid_HT_Heat'].FEEDIN,
                 self.components['grid_HT_Heat'].CONSUMPTION,
             ],
             'LT_Heat_Bus': [
-                self.components['heat_pump'].Qdot_in,
-                self.components['HPC'].HEAT_OUT,
+                self.components['heat_pump_HP'].Qdot_in,
+                self.components['hpc_JUHPC'].HEAT_OUT,
                 self.components['grid_HT_Heat'].FEEDIN,#ToDO: Change it to Grid_LT_Heat
                 self.components['grid_HT_Heat'].CONSUMPTION,
             ],

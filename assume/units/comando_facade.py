@@ -34,7 +34,6 @@ class ComandoFacade:
         components = self.components.copy()#store the components config for the creation of component classes
         self.components.clear()# Clear the space for component classes
         feuls = list()# temporal container for all the fuel types of the main component
-
         #add main components by reading the csv configuration
         for technology, component_data in components.items():
             if technology in comando_dst:
@@ -54,7 +53,7 @@ class ComandoFacade:
         #Add ancillary components: grids, demands
         #Get bidirectional electricity grid interface
         grid_data = {
-            'label': 'Electricity',
+            'label': str(self.id + "_Electricity"),
             'compensation': 50,#ToDo: Update this value with the market clearing result
             'co2_factor': 0,
             'constrain_flow': True,
@@ -66,7 +65,7 @@ class ComandoFacade:
 
         # Get the bidirectional heat grid interface
         ht_grid_data = {
-            'label': 'HT_Heat',
+            'label': str(self.id + "_HT_Heat"),
             'compensation': 93.7,
             'co2_factor': 0,
             'constrain_flow': True,
@@ -87,14 +86,15 @@ class ComandoFacade:
             component_instance = component_class(**grid_data)
             self.components["grid_Gas"] = component_instance
 
-        dsm_demand_forecasts = self.get_dsm_forecasts()
-        for forecast_key, forecast_series in dsm_demand_forecasts.items():
-            energy_type = forecast_key.removeprefix("dsm_").split("Demand")[0].strip()
+        dsm_demand_forecasts = self.get_dsm_forecasts()#ToDo: delete cooling demand in dsm Unit
+        if self.id == 'WVVZ':
+            for forecast_key, forecast_series in dsm_demand_forecasts.items():
+                energy_type = forecast_key.removeprefix("dsm_").split("Demand")[0].strip()
 
-            component_class = comando_dst["demand"]
-            component_instance = component_class(energy_type)
+                component_class = comando_dst["demand"]
+                component_instance = component_class(energy_type)
 
-            self.components[f"demand_{energy_type}"] = component_instance
+                self.components[f"demand_{energy_type}"] = component_instance
 
 
     def setup_model(self, presolve=True):
@@ -138,14 +138,28 @@ class ComandoFacade:
             OutputFlag=1,
         )
         self.opt_model.solve(**options)
+        #temporary Gurobi evaluation
+        if self.opt_model.SolCount > 0:
+            # Plot timeseries of variables from gurobi result as the user choose
+            interactive_timeseries_plot(self.opt_model,self.index)
+            #raise SystemExit("Stopping simulation here")#Fixme: Only for review the result
+            pass
+        else:
+            print("No feasible solution found. Status:", self.opt_model.Status)
+            status = optimize_and_diagnose(
+                model= self.opt_model,
+                file_prefix="HT_Heat",
+            )
+        print("Solving...")
+
         opt_power_volume = [
-            self.opt_model.getVarByName(f"Electricity_consumption[{t}]").X
-            - self.opt_model.getVarByName(f"Electricity_feedin[{t}]").X
+            self.opt_model.getVarByName(f"{self.id}_Electricity_consumption[{t}]").X
+            - self.opt_model.getVarByName(f"{self.id}_Electricity_feedin[{t}]").X
             for t in range(len(self.index))
         ]
         opt_HT_heat_volume = [
-            self.opt_model.getVarByName(f"HT_Heat_consumption[{t}]").X
-            - self.opt_model.getVarByName(f"HT_Heat_feedin[{t}]").X
+            self.opt_model.getVarByName(f"{self.id}_HT_Heat_consumption[{t}]").X
+            - self.opt_model.getVarByName(f"{self.id}_HT_Heat_feedin[{t}]").X
             for t in range(len(self.index))
         ]
 
@@ -158,11 +172,4 @@ class ComandoFacade:
             index=self.index,
             value=opt_HT_heat_volume,
         )
-        if self.opt_model.SolCount > 0:
-            # Plot timeseries of variables from gurobi result as the user choose
-            # interactive_timeseries_plot(self.opt_model,self.index)
-            # raise SystemExit("Stopping simulation here")#Fixme: Only for review the result
-            pass
-        else:
-            print("No feasible solution found. Status:", self.opt_model.Status)
-        print("Solving...")
+
