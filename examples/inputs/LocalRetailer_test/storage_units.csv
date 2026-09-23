@@ -1,0 +1,5 @@
+name,technology,bidding_LEM_DA,unit_operator,max_power_charge,max_power_discharge,capacity,efficiency_charge,efficiency_discharge,initial_soc
+Storage_1,battery_storage,flexable_eom_storage,storage_operator,0.0137,0.0137,0.0274,0.95,0.95,0.5
+Storage_2,battery_storage,flexable_eom_storage,storage_operator,0.1181,0.1181,0.2362,0.95,0.95,0.5
+Storage_3,battery_storage,flexable_eom_storage,storage_operator,0.0068,0.0068,0.0137,0.95,0.95,0.5
+Storage_4,battery_storage,flexable_eom_storage,storage_operator,0.0866,0.0866,0.1731,0.95,0.95,0.5

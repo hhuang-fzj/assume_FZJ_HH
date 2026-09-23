@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 
 # define the path where the simulation results in form of CSV files will be stored, for example: "examples/outputs"
 # "" means no CSV files will be stored
-csv_path = ""
+csv_path = "examples/outputs"
 
 os.makedirs("./examples/local_db", exist_ok=True)
 
@@ -99,16 +99,39 @@ available_examples = {
         "scenario": "example_03",
         "study_case": "base_case_2019_with_DSM",
     },
+
+    # Test example 03 small
+    "test_example_03_small": {"scenario": "Test_example_03", "study_case": "base_case_2019_with_DSM"},
+
+    "test_example_03_demand1800": {"scenario": "Test_example_03_demand1800", "study_case": "base_case_2019_with_DSM"},
+    
+
+
     "large_2019_rl": {"scenario": "example_03a", "study_case": "base_case_2019"},
     "large_2021_rl": {"scenario": "example_03b", "study_case": "base_case_2021"},
     "large_2019_storage": {
         "scenario": "example_03c",
         "study_case": "base_case_2019_with_storage",
+
+
+
+    },
+
+    "local_retailer_test": {
+    "scenario": "LocalRetailer_test",
+    "study_case": "local_retailer_demo",
     },
     # redispatch example
     "redisp_3_nodes": {"scenario": "example_04a", "study_case": "base"},
-}
 
+    # Test
+    "my_dsm_test": {"scenario": "example_03", "study_case": "my_dsm_test"},
+
+    "local_retailer_minimal": {"scenario": "LocalRetailer_minimal", "study_case": "base_case_2019_with_DSM",},
+
+    "local_retailer_demo": {"scenario": "LocalRetailer_test", "study_case": "local_retailer_demo",}
+    
+}
 
 # %%
 if __name__ == "__main__":
@@ -123,12 +146,12 @@ if __name__ == "__main__":
     data_format = "local_db"  # "local_db" or "timescale"
 
     # select the example to run from the available examples above
-    example = "small_with_vre_and_storage"
+    example = "local_retailer_test"  #small_with_vre_and_storage
 
     if data_format == "local_db":
         db_uri = "sqlite:///./examples/local_db/assume_db.db"
     elif data_format == "timescale":
-        db_uri = "postgresql://assume:assume@localhost:5432/assume"
+        db_uri = "postgresql://assume:assume@134.94.194.30:5432/assume"
 
     # create world
     world = World(database_uri=db_uri, export_csv_path=csv_path)

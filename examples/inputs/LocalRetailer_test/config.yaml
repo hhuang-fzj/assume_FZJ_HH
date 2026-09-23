@@ -1,0 +1,48 @@
+local_retailer_demo:
+  start_date: 2016-01-01 00:00
+  end_date: 2016-01-08 00:00
+  time_step: 1h
+  save_frequency_hours: 48
+  markets_config:
+    LEM_DA:
+      operator: LEM_operator
+      product_type: energy
+      start_date: 2016-01-01 00:00
+      products: &id001
+      - duration: 1h
+        count: 24
+        first_delivery: 24h
+      opening_frequency: 24h
+      opening_duration: 15min
+      volume_unit: MWh
+      maximum_bid_volume: 100000
+      maximum_bid_price: 3000
+      minimum_bid_price: -500
+      price_unit: EUR/MWh
+      market_mechanism: pay_as_clear
+    WM_DA:
+      operator: WM_operator
+      product_type: energy
+      start_date: 2016-01-01 00:00
+      products: *id001
+      opening_frequency: 24h
+      opening_duration: 15min
+      volume_unit: MWh
+      maximum_bid_volume: 100000
+      maximum_bid_price: 3000
+      minimum_bid_price: -500
+      price_unit: EUR/MWh
+      market_mechanism: pay_as_clear
+    EOM:
+      operator: EOM_operator
+      product_type: energy
+      start_date: 2016-01-01 00:00
+      products: *id001
+      opening_frequency: 24h
+      opening_duration: 15min
+      volume_unit: MWh
+      maximum_bid_volume: 100000
+      maximum_bid_price: 3000
+      minimum_bid_price: -500
+      price_unit: EUR/MWh
+      market_mechanism: pay_as_clear

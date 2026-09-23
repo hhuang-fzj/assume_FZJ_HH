@@ -95,6 +95,14 @@ bidding_strategies: dict[str, type[BaseStrategy | UnitOperatorStrategy]] = {
     "powerplant_energy_interactive": EnergyInteractiveStrategy,
 }
 
+from assume.strategies.aggregator import (
+    LocalRetailerCoordinatedStrategy,
+)
+
+bidding_strategies[
+    "units_operator_energy_coordinated_local_retailer"
+    ] = LocalRetailerCoordinatedStrategy
+
 try:
     from assume.strategies.learning_strategies import (
         EnergyLearningStrategy,
@@ -118,7 +126,7 @@ try:
     bidding_strategies["renewable_energy_learning_single_bid"] = (
         RenewableEnergyLearningSingleBidStrategy
     )
-
+    
     from assume.strategies.portfolio_learning_strategies import (
         PortfolioLearningStrategy,
     )

@@ -222,7 +222,11 @@ class UnitsOperator(Role):
         )
         self.context.schedule_instant_task(coroutine=self.submit_bids(opening, meta))
 
-    def handle_market_feedback(self, content: ClearingMessage, meta: MetaDict) -> None:
+    def handle_market_feedback(
+        self,
+        content: ClearingMessage,
+        meta: MetaDict,
+    ) -> None:
         """
         Handles the feedback which is received from a market we did bid at.
 
@@ -230,22 +234,91 @@ class UnitsOperator(Role):
             content (ClearingMessage): The content of the clearing message.
             meta (MetaDict): The meta data of the market.
         """
-        logger.debug("%s got market result: %s", self.id, content)
+
+        logger.debug(
+            "%s got market result: %s",
+            self.id,
+            content,
+        )
+
+        # -------------------------------------------------
+        # 1. Get clearing results
+        # -------------------------------------------------
         accepted_orders: Orderbook = content["accepted_orders"]
         rejected_orders: Orderbook = content["rejected_orders"]
+
         orderbook = accepted_orders + rejected_orders
 
+        # -------------------------------------------------
+        # 2. Add market ID
+        # -------------------------------------------------
         for order in orderbook:
             order["market_id"] = content["market_id"]
 
-        marketconfig = self.registered_markets[content["market_id"]]
-        self.valid_orders[marketconfig.product_type].extend(orderbook)
-        self.set_unit_dispatch(orderbook, marketconfig)
-        self.write_actual_dispatch(marketconfig.product_type)
+        # -------------------------------------------------
+        # 3. Get market configuration
+        # -------------------------------------------------
+        marketconfig = self.registered_markets[
+            content["market_id"]
+        ]
 
-        # now once we have the market results and the dispatch has been set
-        # we can calculate the cashflow and reward for the units
-        self.calculate_unit_cashflow_and_reward(orderbook, marketconfig)
+        # -------------------------------------------------
+        # 4. Store all returned market orders
+        # -------------------------------------------------
+        self.valid_orders[
+            marketconfig.product_type
+        ].extend(orderbook)
+
+        # -------------------------------------------------
+        # 5. Forward market result to portfolio strategy
+        # -------------------------------------------------
+        portfolio_strategy = self.portfolio_strategies.get(
+            content["market_id"]
+        )
+
+        if hasattr(
+            portfolio_strategy,
+            "handle_market_feedback",
+        ):
+            portfolio_strategy.handle_market_feedback(
+                market_id=content["market_id"],
+                accepted_orders=accepted_orders,
+                rejected_orders=rejected_orders,
+            )
+
+        # -------------------------------------------------
+        # 6. Keep only orders belonging to real Units
+        # -------------------------------------------------
+        unit_orderbook = [
+            order
+            for order in orderbook
+            if order.get("unit_id") in self.units
+        ]
+
+        # -------------------------------------------------
+        # 7. Original ASSUME unit dispatch
+        # -------------------------------------------------
+        if unit_orderbook:
+            self.set_unit_dispatch(
+                unit_orderbook,
+                marketconfig,
+            )
+
+        # -------------------------------------------------
+        # 8. Original ASSUME actual dispatch
+        # -------------------------------------------------
+        self.write_actual_dispatch(
+            marketconfig.product_type
+        )
+
+        # -------------------------------------------------
+        # 9. Original ASSUME unit cashflow and reward
+        # -------------------------------------------------
+        if unit_orderbook:
+            self.calculate_unit_cashflow_and_reward(
+                unit_orderbook,
+                marketconfig,
+            )
 
     def handle_registration_feedback(
         self, content: RegistrationMessage, meta: MetaDict
@@ -401,7 +474,7 @@ class UnitsOperator(Role):
 
         return market_dispatch, unit_dispatch
 
-    def write_actual_dispatch(self, product_type: str) -> None:
+    def  write_actual_dispatch(self, product_type: str) -> None:
         """
         Sends the actual aggregated dispatch curve to the output agent.
 

@@ -121,8 +121,9 @@ eom_crm_case_2019:
       market_mechanism: pay_as_bid
 
 base_case_2019_with_DSM:
+  simulation_id: Test_example_03_demand1800_1day
   start_date: 2019-01-01 00:00
-  end_date: 2019-01-03 00:00
+  end_date: 2019-01-02 00:00
   time_step: 1h
   industrial_dsm_units: industrial_dsm_units.csv
   save_frequency_hours: 720
@@ -146,9 +147,4 @@ base_case_2019_with_DSM:
       market_mechanism: pay_as_clear
 
 
-  my_dsm_test:
-    start_date: 2019-01-01 00:00
-    end_date: 2019-01-02 00:00
-    time_step: 1h
-    industrial_dsm_units: Test_industrial_dsm_units 
-    save_frequency_hours: 0
+
