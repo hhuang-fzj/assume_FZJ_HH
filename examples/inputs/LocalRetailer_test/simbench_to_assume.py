@@ -68,7 +68,7 @@ OPERATOR_STORAGE = "storage_operator"
 OPERATOR_GRID = "Grid_operator"
 OPERATOR_INDEPENDENT = "independent_operator"
 OPERATOR_STORAGE = "storage_operator"
-PORTFOLIO_STRATEGY = "local_retailer_coordinated"
+PORTFOLIO_STRATEGY = "units_operator_energy_coordinated_local_retailer"
 
 LEM_MARKET_ID = "LEM_DA"
 WM_MARKET_ID = "WM_DA"
