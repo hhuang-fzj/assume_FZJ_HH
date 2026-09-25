@@ -251,7 +251,7 @@ def write_unit_tables(
             f"bidding_{WM_MARKET_ID}": "demand_energy_naive"
             if operator == OPERATOR_AGGREGATOR
             else "",
-            "max_power": round(node_load[node].max() * 2, 6),
+            "max_power": round(node_load[node].max(), 6),
             "min_power": 0,
             "unit_operator": operator,
         }

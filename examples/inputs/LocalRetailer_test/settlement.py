@@ -56,7 +56,8 @@ def read_portfolio_orders(output_path: Path) -> pd.DataFrame:
     Returns:
         pd.DataFrame: One row per delivery period with the columns ``q_lem_bid``,
         ``q_lem_accepted``, ``q_wm_bid``, ``q_wm_accepted``, ``price_lem`` and
-        ``price_wm``. All volumes are positive procurement volumes in MWh.
+        ``price_wm``. All volumes are positive procurement volumes in MWh. Time steps
+        without orders on a market are filled with zero.
 
     Raises:
         FileNotFoundError: If ``market_orders.csv`` does not exist.
@@ -72,7 +73,9 @@ def read_portfolio_orders(output_path: Path) -> pd.DataFrame:
         result[f"q_{suffix}_accepted"] = -market["accepted_volume"]
         result[f"price_{suffix}"] = market["accepted_price"]
 
-    return pd.DataFrame(result).sort_index()
+    # A market can receive no orders at all (alpha = 0 or alpha = 1). Its columns are
+    # then missing for those time steps, so they are filled with zero instead of NaN.
+    return pd.DataFrame(result).fillna(0.0).sort_index()
 
 
 def read_portfolio_units(scenario_path: Path) -> tuple[list[str], list[str]]:
