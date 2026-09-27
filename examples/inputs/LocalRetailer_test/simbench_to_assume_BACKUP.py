@@ -54,62 +54,41 @@ AGGREGATOR_DEMAND_NODES = 15
 
 # Opportunity cost of local sellers in EUR/MWh: a prosumer does not sell locally below
 # the feed-in tariff it would receive from the grid (assumption, source required)
+FEED_IN_TARIFF_EUR_MWH = 80.0
+
+# Share of the district that belongs to the aggregator. The remaining nodes bid on
+# the LEM themselves and are the aggregator's competitors there.
+N_AGGREGATOR_DEMAND_NODES = 15
+
 STUDY_CASE = "local_retailer_demo"
 OPERATOR_AGGREGATOR = "local_retailer"
 OPERATOR_COMMUNITY = "LEC_operator"
 OPERATOR_INDEPENDENT = "independent_operator"
 OPERATOR_STORAGE = "storage_operator"
 OPERATOR_GRID = "Grid_operator"
+OPERATOR_INDEPENDENT = "independent_operator"
+OPERATOR_STORAGE = "storage_operator"
 PORTFOLIO_STRATEGY = "units_operator_energy_coordinated_local_retailer"
 
 LEM_MARKET_ID = "LEM_DA"
 WM_MARKET_ID = "WM_DA"
 EOM_MARKET_ID = "EOM"  # placeholder, the building model reads the price of "EOM"
 
-# The aggregator bids at the price cap of each market to secure acceptance, following
-# the price-taker logic of Haghifam et al. (2022)
+# Opportunity cost of local sellers: they do not sell locally below the feed-in
+# tariff they would receive from the grid (assumption, source required)
+PV_OPPORTUNITY_COST_EUR_MWH = 80.0
+
+# Willingness to pay of the independent consumers in the LEM, approximately the
+# retail price they would otherwise pay (assumption, source required)
+INDEPENDENT_DEMAND_PRICE_EUR_MWH = 250.0
+
+# The aggregator bids at the price cap to secure acceptance, following the
+# price-taker logic of Haghifam et al. (2022)
 AGGREGATOR_BUY_PRICE_EUR_MWH = 3000.0
 
-# ---------------------------------------------------------------------------
-# Price corridor of the local energy market
-#
-# The LEM clearing price is bounded by the two tariffs a member faces outside the LEM:
-# the feed-in tariff a seller would receive from the grid (lower bound) and the retail
-# price a buyer would pay to its supplier (upper bound). Within this corridor local
-# trade is beneficial for both sides. The bounds follow the tariff corridor used in the
-# local market literature.
-#
-# TODO replace both values by referenced figures for Germany in 2016:
-#   - feed-in tariff: Bundesnetzagentur, EEG payment rates for rooftop PV up to 10 kWp
-#   - retail price: BDEW Strompreisanalyse or Destatis, household electricity price
-# ---------------------------------------------------------------------------
-FEED_IN_TARIFF_EUR_MWH = 80.0  # placeholder, lower bound of the corridor
-RETAIL_PRICE_EUR_MWH = 290.0  # placeholder, upper bound of the corridor
-
-# Demand bid price of the independent LEM participants. They are price takers and bid
-# at the upper bound, so their bids are accepted whenever local supply is available.
-INDEPENDENT_DEMAND_PRICE_EUR_MWH = RETAIL_PRICE_EUR_MWH
-
-# ---------------------------------------------------------------------------
-# Wholesale market
-#
-# The wholesale price is exogenous: the aggregator is a price taker and its bid volume
-# is always accepted. This is modelled by a supply unit with a very large capacity whose
-# marginal cost is the exogenous price. With an efficiency of one, the marginal cost of
-# that unit equals the fuel price of the column WM_FUEL_TYPE in fuel_prices_df.csv, so a
-# time series of day-ahead prices can be used directly.
-#
-# TODO replace the flat price by the day-ahead prices of the German bidding zone in
-# 2016 (ENTSO-E transparency platform, Day-ahead Prices).
-# ---------------------------------------------------------------------------
-WM_PRICE_EUR_MWH = 80.0  # placeholder, used when WM_PRICE_FILE does not exist
-WM_PRICE_FILE = SCENARIO_PATH / "wm_price.csv"
-WM_FUEL_TYPE = "wholesale"
-WM_SUPPLY_CAPACITY_MW = 100.0  # large enough to accept every bid of the aggregator
-
-# Price of the placeholder market that the building model reads
-EOM_PRICE_EUR_MWH = RETAIL_PRICE_EUR_MWH
-
+WM_PRICE_EUR_MWH = 80.0  # placeholder until ENTSO-E day-ahead prices are used
+EOM_PRICE_EUR_MWH = 80.0
+WM_COUNTERPARTY_VOLUME_MW = 100.0  # infinite counterparty of the wholesale market
 
 
 def load_simbench_tables(path: Path) -> dict[str, pd.DataFrame]:
@@ -250,7 +229,7 @@ def write_unit_tables(
         - ``residential_dsm_units.csv``: one building unit per prosumer node.
         - ``powerplant_units.csv``: the community PV plants, supply side of the LEM.
         - ``storage_units.csv``: the SimBench storage units, trading on the LEM.
-        - ``powerplant_units.csv`` also holds the wholesale supply unit.
+        - ``exchange_units.csv``: the wholesale market counterparty.
         - ``unit_operators.csv``: the aggregator and its portfolio strategy.
 
     Args:
@@ -325,6 +304,8 @@ def write_unit_tables(
         }
         for row in community_pv.itertuples()
     ]
+    pd.DataFrame(plant_rows).to_csv(SCENARIO_PATH / "powerplant_units.csv", index=False)
+
     # 4. Storage units trade on the LEM and make its price time dependent
     storage_rows = [
         {
@@ -343,24 +324,18 @@ def write_unit_tables(
     ]
     pd.DataFrame(storage_rows).to_csv(SCENARIO_PATH / "storage_units.csv", index=False)
 
-    # 5. Wholesale supply: exogenous price, large enough to accept every bid
-    plant_rows.append(
-        {
-            "name": "WholesaleSupply",
-            "technology": "wholesale_supply",
-            f"bidding_{LEM_MARKET_ID}": "",
-            f"bidding_{WM_MARKET_ID}": "powerplant_energy_naive",
-            f"bidding_{EOM_MARKET_ID}": "",
-            "unit_operator": OPERATOR_GRID,
-            "fuel_type": WM_FUEL_TYPE,
-            "emission_factor": 0,
-            "max_power": WM_SUPPLY_CAPACITY_MW,
-            "min_power": 0,
-            "efficiency": 1,
-            "additional_cost": 0,
-        }
-    )
-    pd.DataFrame(plant_rows).to_csv(SCENARIO_PATH / "powerplant_units.csv", index=False)
+    # 5. Wholesale market counterparty (price taker assumption)
+    pd.DataFrame(
+        [
+            {
+                "name": "GridConnection_WM",
+                f"bidding_{WM_MARKET_ID}": "exchange_energy_naive",
+                "price_import": 0,
+                "price_export": 2999,
+                "unit_operator": OPERATOR_GRID,
+            }
+        ]
+    ).to_csv(SCENARIO_PATH / "exchange_units.csv", index=False)
 
     # 6. The aggregator bids for its whole portfolio on both markets
     pd.DataFrame(
@@ -372,43 +347,6 @@ def write_unit_tables(
             }
         ]
     ).to_csv(SCENARIO_PATH / "unit_operators.csv", index=False)
-
-
-def read_wm_price(index: pd.DatetimeIndex) -> pd.Series:
-    """
-    Read the exogenous wholesale price or fall back to a flat placeholder price.
-
-    Args:
-        index (pd.DatetimeIndex): Time steps of the simulation.
-
-    Returns:
-        pd.Series: Wholesale price in EUR/MWh for every time step.
-
-    Raises:
-        ValueError: If the price file does not cover all time steps of the simulation.
-
-    Note:
-        ``wm_price.csv`` needs a ``datetime`` column and a ``price`` column, for example
-        the day-ahead prices of the German bidding zone exported from the ENTSO-E
-        transparency platform. Without the file a flat price is used and a warning is
-        logged, so a placeholder price is never mistaken for real data.
-    """
-    if not WM_PRICE_FILE.exists():
-        logger.warning(
-            f"{WM_PRICE_FILE.name} not found, using a flat wholesale price of "
-            f"{WM_PRICE_EUR_MWH} EUR/MWh"
-        )
-        return pd.Series(WM_PRICE_EUR_MWH, index=index)
-
-    prices = pd.read_csv(WM_PRICE_FILE, parse_dates=["datetime"], index_col="datetime")[
-        "price"
-    ]
-    prices = prices.resample(RESOLUTION).mean().reindex(index)
-    if prices.isna().any():
-        raise ValueError(
-            f"{WM_PRICE_FILE.name} does not cover all simulation time steps"
-        )
-    return prices
 
 
 def write_profile_files(
@@ -428,6 +366,7 @@ def write_profile_files(
         - ``forecasts_df.csv``: load and PV profiles of the prosumers, and the
           exogenous prices. No LEM columns, so ASSUME calculates the LEM price itself.
         - ``actuals_df.csv``: realised values, identical to the forecast in this version.
+        - ``exchanges_df.csv``: available volume of the wholesale counterparty.
         - ``availability_df.csv``: capacity factor of the community PV plants.
 
     Args:
@@ -465,13 +404,10 @@ def write_profile_files(
         forecasts[f"{house}_pv_profile"] = (
             res_profile.resample(RESOLUTION).mean().loc[index, "PV5"]
         )
-    # Only the wholesale price is given: it is exogenous by assumption. Every other
-    # forecast, in particular the LEM price and all residual loads, is calculated
-    # by ASSUME from the units of the scenario.
-    forecasts[f"price_{WM_MARKET_ID}"] = read_wm_price(index)
-    # The EOM is a placeholder market without participants: the building model of ASSUME
-    # reads the price of a market named "EOM". Its price and residual load cannot be
-    # calculated from a merit order, so both are given and do not affect any trade.
+    forecasts[f"price_{WM_MARKET_ID}"] = pd.Series(WM_PRICE_EUR_MWH, index=index)
+    forecasts[f"residual_load_{WM_MARKET_ID}"] = node_load.loc[
+        index, aggregator_demand + prosumer_nodes
+    ].sum(axis=1)
     forecasts[f"price_{EOM_MARKET_ID}"] = pd.Series(EOM_PRICE_EUR_MWH, index=index)
     forecasts[f"residual_load_{EOM_MARKET_ID}"] = pd.Series(0.0, index=index)
 
@@ -492,11 +428,16 @@ def write_profile_files(
     actuals_df.index.name = "datetime"
     actuals_df.round(9).to_csv(SCENARIO_PATH / "actuals_df.csv")
 
-    # 4. Fuel price of the wholesale supply unit. With an efficiency of one its marginal
-    #    cost equals this price, so the wholesale price is exogenous and time dependent.
-    fuel_prices = pd.DataFrame({WM_FUEL_TYPE: read_wm_price(index), "co2": 0.0})
-    fuel_prices.index.name = "datetime"
-    fuel_prices.round(6).to_csv(SCENARIO_PATH / "fuel_prices_df.csv")
+    # 4. Counterparty volumes of the wholesale market
+    exchanges = pd.DataFrame(
+        {
+            "GridConnection_WM_export": WM_COUNTERPARTY_VOLUME_MW,
+            "GridConnection_WM_import": WM_COUNTERPARTY_VOLUME_MW,
+        },
+        index=index,
+    )
+    exchanges.index.name = "datetime"
+    exchanges.to_csv(SCENARIO_PATH / "exchanges_df.csv")
 
     # 5. Availability of the community PV plants
     availability = pd.DataFrame(
@@ -533,12 +474,6 @@ def write_config() -> None:
         "price_unit": "EUR/MWh",
         "market_mechanism": "pay_as_clear",
     }
-    lem_market = dict(market, operator="LEM_operator")
-    # The LEM has no backstop supplier. Without a price cap the clearing price would run
-    # into the technical maximum of the market whenever local supply is scarce. The cap
-    # is the retail price: nobody buys locally above what its supplier charges.
-    lem_market["maximum_bid_price"] = RETAIL_PRICE_EUR_MWH
-
     config = {
         STUDY_CASE: {
             "start_date": SIMULATION_START,
@@ -546,7 +481,7 @@ def write_config() -> None:
             "time_step": RESOLUTION,
             "save_frequency_hours": 48,
             "markets_config": {
-                LEM_MARKET_ID: lem_market,
+                LEM_MARKET_ID: dict(market, operator="LEM_operator"),
                 WM_MARKET_ID: dict(market, operator="WM_operator"),
                 EOM_MARKET_ID: dict(market, operator="EOM_operator"),
             },

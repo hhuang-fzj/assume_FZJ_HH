@@ -1,2 +1,3 @@
 name,technology,bidding_LEM_DA,bidding_WM_DA,bidding_EOM,unit_operator,fuel_type,emission_factor,max_power,min_power,efficiency,additional_cost
 CommunityPV_Bus41,solar,powerplant_energy_naive,,,LEC_operator,renewable,0,0.1288,0,1,80.0
+WholesaleSupply,wholesale_supply,,powerplant_energy_naive,,Grid_operator,wholesale,0,100.0,0,1,0.0

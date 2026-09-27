@@ -16,7 +16,7 @@ local_retailer_demo:
       opening_duration: 15min
       volume_unit: MWh
       maximum_bid_volume: 100000
-      maximum_bid_price: 3000
+      maximum_bid_price: 290.0
       minimum_bid_price: -500
       price_unit: EUR/MWh
       market_mechanism: pay_as_clear

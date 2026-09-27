@@ -280,22 +280,12 @@ class LocalRetailerCoordinatedStrategy(UnitOperatorStrategy):
         # 3. Return the orderbook requested by ASSUME
         # -------------------------------------------------
         market_id = market_config.market_id
-        price_cap = market_config.maximum_bid_price
-
-        def capped(orderbook: Orderbook) -> Orderbook:
-            """Return copies of the orders with the price capped at the market maximum."""
-            orders = []
-            for order in orderbook:
-                order = order.copy()
-                order["price"] = min(order["price"], price_cap)
-                orders.append(order)
-            return orders
  
         if market_id == "WM_DA":
-            return capped(joint_plan.wm_orderbook)
+            return [order.copy() for order in joint_plan.wm_orderbook]
  
         elif market_id == "LEM_DA":
-            return capped(joint_plan.lem_orderbook)
+            return [order.copy() for order in joint_plan.lem_orderbook]
  
         else:
             raise ValueError(
