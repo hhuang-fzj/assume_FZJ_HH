@@ -12,8 +12,7 @@ figure can be changed without repeating the runs.
 Figures:
     1. ``fig_alpha_volume.png``: procured and uncovered volume over alpha.
     2. ``fig_alpha_cost.png``: cost components over alpha.
-    3. ``fig_timeseries.png``: bid, accepted and uncovered volume of one day, for the
-       run with ``EXAMPLE_ALPHA``.
+    3. ``fig_timeseries.png``: bid, accepted and uncovered volume of one day.
 
 Note:
     The prices of the scenario are placeholders, so the cost figure shows the mechanism
@@ -37,10 +36,7 @@ logger = logging.getLogger(__name__)
 SCENARIO_PATH = Path(__file__).parent
 
 SWEEP_FILE = SCENARIO_PATH / "alpha_sweep.csv"
-# Which run the time series figure shows. The file is written by alpha_sweep.py, so the
-# figure always matches the sweep results.
-EXAMPLE_ALPHA = 0.50
-SETTLEMENT_FILE = SCENARIO_PATH / f"settlement_alpha_{EXAMPLE_ALPHA:.2f}.csv"
+SETTLEMENT_FILE = SCENARIO_PATH / "settlement.csv"
 
 FIGURE_VOLUME = SCENARIO_PATH / "fig_alpha_volume.png"
 FIGURE_COST = SCENARIO_PATH / "fig_alpha_cost.png"
@@ -176,7 +172,7 @@ def plot_timeseries(path: Path, day: str, figure_file: Path) -> None:
     )
     ax.set_xlabel(f"hour of {day}")
     ax.set_ylabel("energy (MWh)")
-    ax.set_title(f"LEM bid and execution over one day (alpha = {EXAMPLE_ALPHA})")
+    ax.set_title("LEM bid and execution over one day")
     ax.set_xticks(range(0, 24, 3))
     ax.legend()
     ax.grid(alpha=0.3)

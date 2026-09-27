@@ -59,8 +59,6 @@ LEM_MARKET_ID = "LEM_DA"
 ALPHA_VALUES = [0.0, 0.25, 0.5, 0.75, 1.0]
 
 RESULT_FILE = SCENARIO_PATH / "alpha_sweep.csv"
-# Time step detail of every run, so a figure can show one run without settling again
-DETAIL_FILE_TEMPLATE = "settlement_alpha_{alpha:.2f}.csv"
 FIGURE_FILE = SCENARIO_PATH / "alpha_sweep.png"
 
 
@@ -108,10 +106,6 @@ def settle_run(output_path: Path, alpha: float) -> dict[str, float]:
     Returns:
         dict[str, float]: Totals of one run: procured volumes, uncovered volume,
         imbalance and the three cost components.
-
-    Note:
-        Besides the totals, the time step detail of the run is written to
-        ``settlement_alpha_<alpha>.csv`` so that figures can be drawn from it later.
     """
     orders = settlement.read_portfolio_orders(output_path)
     demand_units, building_units = settlement.read_portfolio_units(SCENARIO_PATH)
@@ -119,12 +113,6 @@ def settle_run(output_path: Path, alpha: float) -> dict[str, float]:
         SCENARIO_PATH, demand_units, building_units
     )
     table = settlement.settle(orders, residual_load)
-
-    # Keep the time step detail of this run. The totals below are sums of this table,
-    # so a figure drawn from the file always matches the sweep result.
-    detail_file = SCENARIO_PATH / DETAIL_FILE_TEMPLATE.format(alpha=alpha)
-    table.round(6).to_csv(detail_file)
-    logger.info(f"wrote {detail_file.name}")
 
     return {
         "alpha": alpha,
