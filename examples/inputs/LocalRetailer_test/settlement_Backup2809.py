@@ -23,7 +23,6 @@ Note:
 """
 
 import logging
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pandas as pd
@@ -42,14 +41,7 @@ WM_MARKET_ID = "WM_DA"
 AGGREGATOR_OPERATOR = "local_retailer"
 
 # Imbalance price in EUR/MWh (placeholder until reBAP time series is available)
-# Imbalance price. The reBAP time series is read from the files matching REBAP_FILES
-# in the scenario folder (monthly downloads, 15-minute values). Without such files the
-# flat placeholder REBAP_EUR_MWH is used and a warning is logged.
-REBAP_FILES = "rebap_*.xls"
-REBAP_EUR_MWH = 120.0  # placeholder, only used when no reBAP file is found
-
-# Resolution of the simulation. Must match RESOLUTION in simbench_to_assume.py.
-RESOLUTION = "1h"
+REBAP_EUR_MWH = 120.0
 
 SETTLEMENT_FILE = SCENARIO_PATH / "settlement.csv"
 
@@ -134,72 +126,7 @@ def build_realised_residual_load(
     return residual_load
 
 
-def read_rebap_file(path: Path) -> pd.Series:
-    """
-    Read one monthly reBAP file as published by the German transmission system operators.
-
-    The file is an Excel 2003 XML spreadsheet (SpreadsheetML) with the columns
-    ``Datum Uhrzeit von``, ``Datum Uhrzeit bis``, ``NRV-Saldo (MW)`` and
-    ``reBAP (EUR/MWh)``, one row per quarter hour.
-
-    Args:
-        path (Path): Path to the file.
-
-    Returns:
-        pd.Series: reBAP in EUR/MWh, indexed by the start of each quarter hour.
-    """
-    ns = {"ss": "urn:schemas-microsoft-com:office:spreadsheet"}
-    rows = []
-    for row in ET.parse(path).getroot().findall(".//ss:Row", ns):
-        cells = [cell.find("ss:Data", ns) for cell in row.findall("ss:Cell", ns)]
-        rows.append([cell.text if cell is not None else None for cell in cells])
-
-    # Data rows start with a date such as " 01.06.2016  00:00  "
-    data = [row for row in rows if row and row[0] and row[0].strip()[:2].isdigit()]
-    start = pd.to_datetime([row[0].strip() for row in data], format="%d.%m.%Y  %H:%M")
-    return pd.Series([float(row[3]) for row in data], index=start, name="rebap")
-
-
-def read_rebap(index: pd.DatetimeIndex) -> pd.Series:
-    """
-    Read the reBAP for the settlement periods, or fall back to a flat placeholder.
-
-    Args:
-        index (pd.DatetimeIndex): Settlement periods.
-
-    Returns:
-        pd.Series: reBAP in EUR/MWh per settlement period. Quarter-hourly values are
-        averaged to the simulation resolution.
-
-    Raises:
-        ValueError: If reBAP files exist but do not cover all settlement periods.
-
-    Note:
-        Averaging to hourly values is a simplification: imbalances are settled per
-        quarter hour in Germany. It is exact only if the imbalance is constant within
-        the hour.
-    """
-    files = sorted(SCENARIO_PATH.glob(REBAP_FILES))
-    if not files:
-        logger.warning(
-            f"no file matching {REBAP_FILES} found, using a flat reBAP of "
-            f"{REBAP_EUR_MWH} EUR/MWh"
-        )
-        return pd.Series(REBAP_EUR_MWH, index=index)
-
-    quarter_hourly = pd.concat(read_rebap_file(f) for f in files).sort_index()
-    rebap = quarter_hourly.resample(RESOLUTION).mean().reindex(index)
-    if rebap.isna().any():
-        raise ValueError(
-            f"reBAP files {[f.name for f in files]} do not cover all settlement periods"
-        )
-    logger.info(f"reBAP read from {[f.name for f in files]}")
-    return rebap
-
-
-def settle(
-    orders: pd.DataFrame, residual_load: pd.Series, rebap: pd.Series | None = None
-) -> pd.DataFrame:
+def settle(orders: pd.DataFrame, residual_load: pd.Series) -> pd.DataFrame:
     """
     Derive uncovered volume, imbalance and costs per delivery period.
 
@@ -207,8 +134,6 @@ def settle(
         orders (pd.DataFrame): Portfolio orders from :func:`read_portfolio_orders`.
         residual_load (pd.Series): Realised residual load from
             :func:`build_realised_residual_load`.
-        rebap (pd.Series | None, optional): Imbalance price in EUR/MWh per period.
-            Read with :func:`read_rebap` if not given.
 
     Returns:
         pd.DataFrame: ``orders`` extended by ``residual_load``, ``uncovered``,
@@ -229,10 +154,7 @@ def settle(
     #    imbalance price
     settlement["cost_lem"] = settlement.q_lem_accepted * settlement.price_lem
     settlement["cost_wm"] = settlement.q_wm_accepted * settlement.price_wm
-    if rebap is None:
-        rebap = read_rebap(settlement.index)
-    settlement["rebap"] = rebap.reindex(settlement.index)
-    settlement["cost_imbalance"] = settlement.imbalance * settlement.rebap
+    settlement["cost_imbalance"] = settlement.imbalance * REBAP_EUR_MWH
     settlement["cost_total"] = (
         settlement.cost_lem + settlement.cost_wm + settlement.cost_imbalance
     )
