@@ -21,6 +21,10 @@ Note:
     mechanism; the absolute values change once the prices are replaced by referenced
     data.
 """
+from datetime import datetime
+
+# Time stamp shared by all runs of one sweep, e.g. "20260929_1430"
+RUN_STAMP = datetime.now().strftime("%Y%m%d_%H%M")
 
 import logging
 import shutil
@@ -78,9 +82,10 @@ def run_simulation(alpha: float) -> Path:
         Alpha is set on the strategy object after the scenario is loaded, so the CSV
         inputs stay untouched and all runs use exactly the same data.
     """
+    # Every run writes to a new folder, so earlier results are kept and never mixed
+    # with the new ones: ASSUME appends to existing CSV files.
     run_id = f"alpha_{alpha:.2f}".replace(".", "_")
-    export_path = OUTPUT_ROOT / run_id
-    shutil.rmtree(export_path, ignore_errors=True)
+    export_path = OUTPUT_ROOT / f"{RUN_STAMP}_{run_id}"
 
     world = World(database_uri=None, export_csv_path=str(export_path))
     load_scenario_folder(
