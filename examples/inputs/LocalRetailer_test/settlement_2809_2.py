@@ -28,8 +28,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from simbench_to_assume import to_simulation_time
-
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -85,8 +83,7 @@ def read_portfolio_orders(output_path: Path) -> pd.DataFrame:
 
     # A market can receive no orders at all (alpha = 0 or alpha = 1). Its columns are
     # then missing for those time steps, so they are filled with zero instead of NaN.
-    # Negating a zero volume gives -0.0; adding 0.0 turns it into a plain 0.0
-    return pd.DataFrame(result).fillna(0.0).sort_index() + 0.0
+    return pd.DataFrame(result).fillna(0.0).sort_index()
 
 
 def read_portfolio_units(scenario_path: Path) -> tuple[list[str], list[str]]:
@@ -159,13 +156,8 @@ def read_rebap_file(path: Path) -> pd.Series:
 
     # Data rows start with a date such as " 01.06.2016  00:00  "
     data = [row for row in rows if row and row[0] and row[0].strip()[:2].isdigit()]
-    start = pd.DatetimeIndex(
-        pd.to_datetime([row[0].strip() for row in data], format="%d.%m.%Y  %H:%M")
-    )
-    # The file is in German local time, the simulation in standard time
-    return pd.Series(
-        [float(row[3]) for row in data], index=to_simulation_time(start), name="rebap"
-    )
+    start = pd.to_datetime([row[0].strip() for row in data], format="%d.%m.%Y  %H:%M")
+    return pd.Series([float(row[3]) for row in data], index=start, name="rebap")
 
 
 def read_rebap(index: pd.DatetimeIndex) -> pd.Series:

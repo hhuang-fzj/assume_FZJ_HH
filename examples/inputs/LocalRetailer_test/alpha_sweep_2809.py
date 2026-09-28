@@ -123,8 +123,7 @@ def settle_run(output_path: Path, alpha: float) -> dict[str, float]:
     # Keep the time step detail of this run. The totals below are sums of this table,
     # so a figure drawn from the file always matches the sweep result.
     detail_file = SCENARIO_PATH / DETAIL_FILE_TEMPLATE.format(alpha=alpha)
-    # Rounding tiny negative values gives -0.0; adding 0.0 turns it into 0.0
-    (table.round(6) + 0.0).to_csv(detail_file)
+    table.round(6).to_csv(detail_file)
     logger.info(f"wrote {detail_file.name}")
 
     return {
@@ -203,7 +202,7 @@ def main() -> None:
         )
 
     results = pd.DataFrame(rows)
-    (results.round(6) + 0.0).to_csv(RESULT_FILE, index=False)
+    results.round(6).to_csv(RESULT_FILE, index=False)
     logger.info(f"Results written to {RESULT_FILE.name}")
 
     plot_sweep(results, FIGURE_FILE)

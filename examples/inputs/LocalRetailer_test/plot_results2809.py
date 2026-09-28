@@ -85,12 +85,8 @@ def plot_volumes(sweep: pd.DataFrame, figure_file: Path) -> None:
         The uncovered volume grows with alpha because the local supply is limited.
     """
     fig, ax = plt.subplots(figsize=FIGURE_SIZE)
-    ax.plot(
-        sweep.alpha, sweep.q_lem_accepted, marker="o", label="net purchase on the LEM"
-    )
-    ax.plot(
-        sweep.alpha, sweep.q_wm_accepted, marker="s", label="net purchase on the WM"
-    )
+    ax.plot(sweep.alpha, sweep.q_lem_accepted, marker="o", label="procured on the LEM")
+    ax.plot(sweep.alpha, sweep.q_wm_accepted, marker="s", label="procured on the WM")
     ax.plot(
         sweep.alpha,
         sweep.uncovered,
@@ -99,9 +95,8 @@ def plot_volumes(sweep: pd.DataFrame, figure_file: Path) -> None:
         label="uncovered LEM volume",
     )
     ax.set_xlabel(ALPHA_LABEL)
-    ax.axhline(0, color="black", linewidth=0.8)
-    ax.set_ylabel("energy (MWh), purchase > 0, sale < 0")
-    ax.set_title("Traded and uncovered volume over one week")
+    ax.set_ylabel("energy (MWh)")
+    ax.set_title("Procured and uncovered volume")
     ax.legend()
     ax.grid(alpha=0.3)
     fig.tight_layout()
@@ -117,31 +112,18 @@ def plot_costs(sweep: pd.DataFrame, figure_file: Path) -> None:
     Args:
         sweep (pd.DataFrame): Result table of the sweep.
         figure_file (Path): Path of the figure to write.
-
-    Note:
-        A component can be negative, e.g. revenue from selling surplus on the LEM.
-        Positive parts are stacked upwards from zero and negative parts downwards, so
-        no bar hides another one. The total cost is the sum of all parts and is drawn
-        as a line.
     """
     fig, ax = plt.subplots(figsize=FIGURE_SIZE)
     width = (sweep.alpha.diff().dropna().min() or 0.2) * 0.6
 
-    upper = sweep.cost_lem * 0
-    lower = sweep.cost_lem * 0
-    for column, label, color in [
-        ("cost_lem", "LEM (sale < 0)", "tab:blue"),
-        ("cost_wm", "WM", "tab:orange"),
-        ("cost_imbalance", "imbalance (reBAP)", "tab:green"),
+    bottom = sweep.cost_lem * 0
+    for column, label in [
+        ("cost_lem", "LEM procurement"),
+        ("cost_wm", "WM procurement"),
+        ("cost_imbalance", "imbalance"),
     ]:
-        positive = sweep[column].clip(lower=0)
-        negative = sweep[column].clip(upper=0)
-        ax.bar(
-            sweep.alpha, positive, bottom=upper, width=width, color=color, label=label
-        )
-        ax.bar(sweep.alpha, negative, bottom=lower, width=width, color=color)
-        upper = upper + positive
-        lower = lower + negative
+        ax.bar(sweep.alpha, sweep[column], bottom=bottom, width=width, label=label)
+        bottom = bottom + sweep[column]
 
     ax.plot(
         sweep.alpha,
@@ -151,9 +133,8 @@ def plot_costs(sweep: pd.DataFrame, figure_file: Path) -> None:
         linewidth=1.5,
         label="total cost",
     )
-    ax.axhline(0, color="black", linewidth=0.8)
     ax.set_xlabel(ALPHA_LABEL)
-    ax.set_ylabel("cost over one week (EUR), revenue < 0")
+    ax.set_ylabel("cost (EUR)")
     ax.set_title("Cost components of the aggregator")
     ax.legend()
     ax.grid(alpha=0.3, axis="y")
@@ -187,10 +168,8 @@ def plot_timeseries(path: Path, day: str, figure_file: Path) -> None:
 
     fig, ax = plt.subplots(figsize=FIGURE_SIZE)
     hours = table.index.hour
+    ax.plot(hours, table.q_lem_bid, marker="o", label="LEM bid")
     ax.plot(hours, table.q_lem_accepted, marker="s", label="LEM accepted")
-    # The bid is drawn last and dashed, so it stays visible where it equals the
-    # accepted volume
-    ax.plot(hours, table.q_lem_bid, marker="o", linestyle="--", label="LEM bid")
     ax.fill_between(
         hours,
         table.q_lem_accepted,
@@ -199,8 +178,7 @@ def plot_timeseries(path: Path, day: str, figure_file: Path) -> None:
         label="uncovered",
     )
     ax.set_xlabel(f"hour of {day}")
-    ax.axhline(0, color="black", linewidth=0.8)
-    ax.set_ylabel("energy (MWh), purchase > 0, sale < 0")
+    ax.set_ylabel("energy (MWh)")
     ax.set_title(f"LEM bid and execution over one day (alpha = {EXAMPLE_ALPHA})")
     ax.set_xticks(range(0, 24, 3))
     ax.legend()

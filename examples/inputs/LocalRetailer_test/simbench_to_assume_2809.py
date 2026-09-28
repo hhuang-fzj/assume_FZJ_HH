@@ -83,8 +83,8 @@ AGGREGATOR_BUY_PRICE_EUR_MWH = 3000.0
 #   - feed-in tariff: Bundesnetzagentur, EEG payment rates for rooftop PV up to 10 kWp
 #   - retail price: BDEW Strompreisanalyse or Destatis, household electricity price
 # ---------------------------------------------------------------------------
-FEED_IN_TARIFF_EUR_MWH = 123.1  # placeholder, lower bound of the corridor
-RETAIL_PRICE_EUR_MWH = 288.0  # placeholder, upper bound of the corridor
+FEED_IN_TARIFF_EUR_MWH = 123.1  # Clearingstelle EEG|KWKG, HR 24: PV <= 10 kWp, 2016
+RETAIL_PRICE_EUR_MWH = 288.0  # BDEW Strompreisanalyse Januar 2020, Folie 11: 2016
 
 # Demand bid price of the independent LEM participants. They are price takers and bid
 # at the upper bound, so their bids are accepted whenever local supply is available.
@@ -102,22 +102,14 @@ INDEPENDENT_DEMAND_PRICE_EUR_MWH = RETAIL_PRICE_EUR_MWH
 # TODO replace the flat price by the day-ahead prices of the German bidding zone in
 # 2016 (ENTSO-E transparency platform, Day-ahead Prices).
 # ---------------------------------------------------------------------------
-WM_PRICE_EUR_MWH = 29.0  # fallback only, used when WM_PRICE_FILE does not exist
-# Hourly day-ahead prices 2016, exported from SMARD (Bundesnetzagentur):
-# Markt > Grosshandelspreise > Marktgebiet DE/AT/LU (bis 30.09.2018) > Stunde.
-# In 2016 Germany, Austria and Luxembourg formed one bidding zone.
-WM_PRICE_FILE = SCENARIO_PATH / "Gro_handelspreise_201601010000_201701010000_Stunde.csv"
-WM_PRICE_COLUMN = "DE/AT/LU [€/MWh] Berechnete Auflösungen"
+WM_PRICE_EUR_MWH = 27.69  # netztransparenz.de, Marktwertübersicht, MW-EPEX Jun 2016
+WM_PRICE_FILE = SCENARIO_PATH / "wm_price.csv"
 WM_FUEL_TYPE = "wholesale"
 WM_SUPPLY_CAPACITY_MW = 100.0  # large enough to accept every bid of the aggregator
-# Bid price of the wholesale demand unit. It is set to the price cap of the wholesale
-# market, so the demand unit always buys and the wholesale supply unit is always the
-# marginal unit. The wholesale clearing price therefore equals the exogenous price in
-# every hour, also when that price changes hour by hour.
-WM_DEMAND_PRICE_EUR_MWH = 3000.0
 
 # Price of the placeholder market that the building model reads
 EOM_PRICE_EUR_MWH = RETAIL_PRICE_EUR_MWH
+
 
 
 def load_simbench_tables(path: Path) -> dict[str, pd.DataFrame]:
@@ -381,13 +373,14 @@ def write_unit_tables(
             {
                 "name": "WholesaleDemand",
                 f"bidding_{WM_MARKET_ID}": "exchange_energy_naive",
-                # import volume is zero, so the import price is never used
-                "price_import": 0.0,
-                "price_export": WM_DEMAND_PRICE_EUR_MWH,
+                "price_import": WM_PRICE_EUR_MWH,
+                "price_export": WM_PRICE_EUR_MWH,
                 "unit_operator": OPERATOR_GRID,
             }
         ]
     ).to_csv(SCENARIO_PATH / "exchange_units.csv", index=False)
+
+
 
     # 6. The aggregator bids for its whole portfolio on both markets
     pd.DataFrame(
@@ -399,32 +392,6 @@ def write_unit_tables(
             }
         ]
     ).to_csv(SCENARIO_PATH / "unit_operators.csv", index=False)
-
-
-def to_simulation_time(local_time: pd.DatetimeIndex) -> pd.DatetimeIndex:
-    """
-    Convert German local time with daylight saving time to the time basis of SimBench.
-
-    Args:
-        local_time (pd.DatetimeIndex): Time stamps in German local time, including the
-            missing hour in March and the repeated hour in October.
-
-    Returns:
-        pd.DatetimeIndex: Time stamps in central European standard time (UTC+1)
-        without time zone information.
-
-    Note:
-        SimBench provides 35 136 quarter hours for 2016, i.e. 366 days without a
-        daylight saving shift, so its profiles do not follow German local time. It is
-        assumed here that they are given in standard time (UTC+1). Market data from
-        SMARD and netztransparenz is published in local time and is shifted by one hour
-        in summer by this conversion.
-    """
-    return (
-        local_time.tz_localize("Europe/Berlin", ambiguous="infer")
-        .tz_convert("Etc/GMT-1")
-        .tz_localize(None)
-    )
 
 
 def read_wm_price(index: pd.DatetimeIndex) -> pd.Series:
@@ -441,10 +408,10 @@ def read_wm_price(index: pd.DatetimeIndex) -> pd.Series:
         ValueError: If the price file does not cover all time steps of the simulation.
 
     Note:
-        ``WM_PRICE_FILE`` is the SMARD export of hourly day-ahead prices (semicolon
-        separated, decimal comma, German date format, local time). Without the file a
-        flat price is used and a warning is logged, so a placeholder price is never
-        mistaken for real data.
+        ``wm_price.csv`` needs a ``datetime`` column and a ``price`` column, for example
+        the day-ahead prices of the German bidding zone exported from the ENTSO-E
+        transparency platform. Without the file a flat price is used and a warning is
+        logged, so a placeholder price is never mistaken for real data.
     """
     if not WM_PRICE_FILE.exists():
         logger.warning(
@@ -453,13 +420,9 @@ def read_wm_price(index: pd.DatetimeIndex) -> pd.Series:
         )
         return pd.Series(WM_PRICE_EUR_MWH, index=index)
 
-    raw = pd.read_csv(WM_PRICE_FILE, sep=";", decimal=",", na_values="-")
-    local_time = pd.DatetimeIndex(
-        pd.to_datetime(raw["Datum von"], format="%d.%m.%Y %H:%M")
-    )
-    prices = pd.Series(
-        raw[WM_PRICE_COLUMN].to_numpy(), index=to_simulation_time(local_time)
-    )
+    prices = pd.read_csv(WM_PRICE_FILE, parse_dates=["datetime"], index_col="datetime")[
+        "price"
+    ]
     prices = prices.resample(RESOLUTION).mean().reindex(index)
     if prices.isna().any():
         raise ValueError(
@@ -565,6 +528,8 @@ def write_profile_files(
     )
     exchanges.index.name = "datetime"
     exchanges.to_csv(SCENARIO_PATH / "exchanges_df.csv")
+
+
 
     # 5. Availability of the community PV plants
     availability = pd.DataFrame(
