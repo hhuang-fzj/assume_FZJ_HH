@@ -41,8 +41,8 @@ logger = logging.getLogger(__name__)
 SIMBENCH_PATH = Path(__file__).parent / "simbench_raw"
 SCENARIO_PATH = Path(__file__).parent
 
-SIMULATION_START = "2016-01-01 00:00"  # SimBench profiles cover the year 2016
-SIMULATION_END = "2016-01-08 00:00"
+SIMULATION_START = "2016-06-19 00:00"  # SimBench profiles cover the year 2016
+SIMULATION_END = "2016-06-27 00:00"
 RESOLUTION = "1h"
 
 # PV systems above this rated power are community plants, not rooftop systems (MW)
@@ -83,8 +83,8 @@ AGGREGATOR_BUY_PRICE_EUR_MWH = 3000.0
 #   - feed-in tariff: Bundesnetzagentur, EEG payment rates for rooftop PV up to 10 kWp
 #   - retail price: BDEW Strompreisanalyse or Destatis, household electricity price
 # ---------------------------------------------------------------------------
-FEED_IN_TARIFF_EUR_MWH = 80.0  # placeholder, lower bound of the corridor
-RETAIL_PRICE_EUR_MWH = 290.0  # placeholder, upper bound of the corridor
+FEED_IN_TARIFF_EUR_MWH = 123.1  # placeholder, lower bound of the corridor
+RETAIL_PRICE_EUR_MWH = 288.0  # placeholder, upper bound of the corridor
 
 # Demand bid price of the independent LEM participants. They are price takers and bid
 # at the upper bound, so their bids are accepted whenever local supply is available.
@@ -102,7 +102,7 @@ INDEPENDENT_DEMAND_PRICE_EUR_MWH = RETAIL_PRICE_EUR_MWH
 # TODO replace the flat price by the day-ahead prices of the German bidding zone in
 # 2016 (ENTSO-E transparency platform, Day-ahead Prices).
 # ---------------------------------------------------------------------------
-WM_PRICE_EUR_MWH = 80.0  # placeholder, used when WM_PRICE_FILE does not exist
+WM_PRICE_EUR_MWH = 29.0  # placeholder, used when WM_PRICE_FILE does not exist
 WM_PRICE_FILE = SCENARIO_PATH / "wm_price.csv"
 WM_FUEL_TYPE = "wholesale"
 WM_SUPPLY_CAPACITY_MW = 100.0  # large enough to accept every bid of the aggregator
@@ -341,7 +341,11 @@ def write_unit_tables(
         }
         for i, row in enumerate(storage.itertuples())
     ]
-    pd.DataFrame(storage_rows).to_csv(SCENARIO_PATH / "storage_units.csv", index=False)
+    storage_file = SCENARIO_PATH / "storage_units.csv"
+    if storage_rows:
+        pd.DataFrame(storage_rows).to_csv(storage_file, index=False)
+    else:
+        storage_file.unlink(missing_ok=True)
 
     # 5. Wholesale supply: exogenous price, large enough to accept every bid
     plant_rows.append(
@@ -361,6 +365,22 @@ def write_unit_tables(
         }
     )
     pd.DataFrame(plant_rows).to_csv(SCENARIO_PATH / "powerplant_units.csv", index=False)
+
+    # 5b. Wholesale demand: buys at the wholesale price, so surplus sold by the
+    #     aggregator on the wholesale market is always accepted as well
+    pd.DataFrame(
+        [
+            {
+                "name": "WholesaleDemand",
+                f"bidding_{WM_MARKET_ID}": "exchange_energy_naive",
+                "price_import": WM_PRICE_EUR_MWH,
+                "price_export": WM_PRICE_EUR_MWH,
+                "unit_operator": OPERATOR_GRID,
+            }
+        ]
+    ).to_csv(SCENARIO_PATH / "exchange_units.csv", index=False)
+
+
 
     # 6. The aggregator bids for its whole portfolio on both markets
     pd.DataFrame(
@@ -498,6 +518,19 @@ def write_profile_files(
     fuel_prices.index.name = "datetime"
     fuel_prices.round(6).to_csv(SCENARIO_PATH / "fuel_prices_df.csv")
 
+    # Volumes of the wholesale demand unit: it only buys (export), never sells
+    exchanges = pd.DataFrame(
+        {
+            "WholesaleDemand_export": WM_SUPPLY_CAPACITY_MW / 2,
+            "WholesaleDemand_import": 0.0,
+        },
+        index=index,
+    )
+    exchanges.index.name = "datetime"
+    exchanges.to_csv(SCENARIO_PATH / "exchanges_df.csv")
+
+
+
     # 5. Availability of the community PV plants
     availability = pd.DataFrame(
         {
@@ -584,7 +617,7 @@ def main() -> None:
         independent_demand,
         community_pv,
         node_load,
-        tables["Storage"],
+        tables["Storage"].iloc[0:0],
         tables["RES"],
     )
     write_profile_files(

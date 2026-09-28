@@ -47,7 +47,7 @@ FIGURE_COST = SCENARIO_PATH / "fig_alpha_cost.png"
 FIGURE_TIMESERIES = SCENARIO_PATH / "fig_timeseries.png"
 
 # Day shown in the time series figure
-EXAMPLE_DAY = "2016-01-03"
+EXAMPLE_DAY = None
 
 FIGURE_SIZE = (7.0, 4.5)
 DPI = 200
@@ -161,7 +161,10 @@ def plot_timeseries(path: Path, day: str, figure_file: Path) -> None:
         logger.warning(f"{path.name} not found, skipping the time series figure")
         return
 
-    table = pd.read_csv(path, parse_dates=[0], index_col=0).loc[day]
+    table = pd.read_csv(path, parse_dates=[0], index_col=0)
+    if day is None:
+        day = str(table.index.normalize().unique()[1].date())
+    table = table.loc[day]
 
     fig, ax = plt.subplots(figsize=FIGURE_SIZE)
     hours = table.index.hour
