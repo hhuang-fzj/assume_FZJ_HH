@@ -12,9 +12,12 @@ import torch as th
 from assume.common.base import (
     BaseUnit,
     LearningStrategy,
+    MinMaxChargeStrategy,
+    MinMaxStrategy,
     SupportsMinMax,
     SupportsMinMaxCharge,
 )
+from assume.common.fast_pandas import FastSeries
 from assume.common.market_objects import MarketConfig, Orderbook, Product
 from assume.common.utils import min_max_scale
 from assume.reinforcement_learning.algorithms import actor_architecture_aliases
@@ -23,24 +26,28 @@ from assume.reinforcement_learning.learning_utils import NormalActionNoise
 logger = logging.getLogger(__name__)
 
 
-class BaseLearningStrategy(LearningStrategy):
+class TorchLearningStrategy(LearningStrategy):
+    """
+    A strategy to enable machine learning with pytorch.
+    """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.unit_id = kwargs["unit_id"]
+        self.is_prepared = False
 
         # defines bounds of actions space
-        self.min_bid_price = kwargs.get("min_bid_price", -100)
-        self.max_bid_price = kwargs.get("max_bid_price", 100)
+        self.min_bid_price = self.learning_config.min_bid_price
+        self.max_bid_price = self.learning_config.max_bid_price
 
         # tells us whether we are training the agents or just executing per-learning strategies
-        self.learning_mode = kwargs.get("learning_mode", False)
-        self.evaluation_mode = kwargs.get("evaluation_mode", False)
+        self.learning_mode = self.learning_config.learning_mode
+        self.evaluation_mode = self.learning_config.evaluation_mode
 
-        # based on learning config
-        self.algorithm = kwargs.get("algorithm", "matd3")
-        self.actor_architecture = kwargs.get("actor_architecture", "mlp")
+        self.actor_architecture = self.learning_config.actor_architecture
 
+        # check if actor architecture is available
         if self.actor_architecture in actor_architecture_aliases.keys():
             self.actor_architecture_class = actor_architecture_aliases[
                 self.actor_architecture
@@ -51,36 +58,39 @@ class BaseLearningStrategy(LearningStrategy):
             )
 
         # sets the device of the actor network
-        device = kwargs.get("device", "cpu")
-        self.device = th.device(device if th.cuda.is_available() else "cpu")
-        if not self.learning_mode:
-            self.device = th.device("cpu")
+        self.device = self.learning_role.device
 
         # future: add option to choose between float16 and float32
         # float_type = kwargs.get("float_type", "float32")
         self.float_type = th.float
 
         # define standard deviation for the initial exploration noise
-        self.exploration_noise_std = kwargs.get("exploration_noise_std", 0.2)
+        self.exploration_noise_std = self.learning_config.exploration_noise_std
 
         if self.learning_mode or self.evaluation_mode:
-            self.collect_initial_experience_mode = bool(
-                kwargs.get("episodes_collecting_initial_experience", True)
-            )
+            # learning role overwrites this if loaded from file or after initial experience episodes
+            self.collect_initial_experience_mode = True
 
             self.action_noise = NormalActionNoise(
                 mu=0.0,
-                sigma=kwargs.get("noise_sigma", 0.1),
+                sigma=self.learning_config.noise_sigma,
                 action_dimension=self.act_dim,
-                scale=kwargs.get("noise_scale", 1.0),
-                dt=kwargs.get("noise_dt", 1.0),
+                scale=self.learning_config.noise_scale,
+                dt=self.learning_config.noise_dt,
             )
 
-        elif Path(kwargs["trained_policies_load_path"]).is_dir():
-            self.load_actor_params(load_path=kwargs["trained_policies_load_path"])
+            self.learning_role.register_strategy(self)
+
+        # actor policies are only loaded here from file if learning mode is off (otherwise handled by learning_role)
+        # i.e., when loading pre-trained strategies without training ("learning_mode: false" and "trained_policies_load_path" specified in config)
+        # or final simulation run after training (terminate_learning == true)
+        elif Path(self.learning_config.trained_policies_load_path).is_dir():
+            self.load_actor_params(
+                load_path=self.learning_config.trained_policies_load_path
+            )
         else:
             raise FileNotFoundError(
-                f"No policies were provided for DRL unit {self.unit_id}!. Please provide a valid path to the trained policies."
+                f"No policies were provided for DRL unit {self.unit_id}!. Please provide a valid path to the trained policies. Expected them under filepath '{self.learning_config.trained_policies_load_path}'."
             )
 
     def load_actor_params(self, load_path):
@@ -106,26 +116,28 @@ class BaseLearningStrategy(LearningStrategy):
 
     def prepare_observations(self, unit, market_id):
         # scaling factors for the observations
-        upper_scaling_factor_price = max(unit.forecaster[f"price_{market_id}"])
-        lower_scaling_factor_price = min(unit.forecaster[f"price_{market_id}"])
-        upper_scaling_factor_res_load = max(
-            unit.forecaster[f"residual_load_{market_id}"]
+        # Note: These scaling factors could be interpreted as information leakage. However as we are in a simulation environment and not a purley forecasting setting
+        # we assume that the agent has access to this information already
+        upper_scaling_factor_price = max(unit.forecaster.price[market_id])
+        lower_scaling_factor_price = min(unit.forecaster.price[market_id])
+        residual_load = unit.forecaster.residual_load.get(
+            market_id, FastSeries(index=unit.index, value=0)
         )
-        lower_scaling_factor_res_load = min(
-            unit.forecaster[f"residual_load_{market_id}"]
-        )
+        upper_scaling_factor_res_load = max(residual_load)
+        lower_scaling_factor_res_load = min(residual_load)
 
         self.scaled_res_load_obs = min_max_scale(
-            unit.forecaster[f"residual_load_{market_id}"],
+            residual_load,
             lower_scaling_factor_res_load,
             upper_scaling_factor_res_load,
         )
 
         self.scaled_prices_obs = min_max_scale(
-            unit.forecaster[f"price_{market_id}"],
+            unit.forecaster.price[market_id],
             lower_scaling_factor_price,
             upper_scaling_factor_price,
         )
+        self.is_prepared = True
 
     def create_observation(
         self, unit: BaseUnit, market_id: str, start: datetime, end: datetime
@@ -157,9 +169,7 @@ class BaseLearningStrategy(LearningStrategy):
         """
 
         # ensure scaled observations are prepared
-        if not hasattr(self, "scaled_res_load_obs") or not hasattr(
-            self, "scaled_prices_obs"
-        ):
+        if not self.is_prepared:
             self.prepare_observations(unit, market_id)
 
         # =============================================================================
@@ -175,6 +185,8 @@ class BaseLearningStrategy(LearningStrategy):
         )
 
         # --- 2. Historical actual prices (backward-looking) ---
+        # Note: We scale with the max_bid_price here in comparison to the scaling of the forecast where we use the max price of the forecast period
+        # this is not consistent but has worked well so far. Future work could look into this in more detail.
         scaled_price_history = (
             unit.outputs["energy_accepted_price"].window(
                 start, self.foresight, direction="backward"
@@ -199,6 +211,11 @@ class BaseLearningStrategy(LearningStrategy):
         observation = th.as_tensor(
             observation, dtype=self.float_type, device=self.device
         ).flatten()
+
+        if self.learning_mode:
+            self.learning_role.add_observation_to_cache(
+                self.unit_id, start, observation
+            )
 
         return observation
 
@@ -287,17 +304,17 @@ class BaseLearningStrategy(LearningStrategy):
         return curr_action, noise
 
 
-class RLStrategy(BaseLearningStrategy):
+class EnergyLearningStrategy(TorchLearningStrategy, MinMaxStrategy):
     """
     Reinforcement Learning Strategy that enables the agent to learn optimal bidding strategies
     on an Energy-Only Market.
 
     The agent submits two price bids: one for the inflexible component (P_min) and another for
-    the flexible component (P_max - P_min) of its capacity. This strategy utilizes a set of 50
+    the flexible component (P_max - P_min) of its capacity. This strategy utilizes a set of 38
     observations to generate actions, which are then transformed into market bids. The observation
     space comprises two unique values: the marginal cost and the current capacity of the unit.
 
-    The observation space for this strategy consists of 50 elements, drawn from both the forecaster
+    The observation space for this strategy consists of 38 elements, drawn from both the forecaster
     and the unit's internal state. Observations include the following components:
 
     - **Forecasted Residual Load**: Forecasted load over the foresight period, scaled by the maximum
@@ -329,11 +346,9 @@ class RLStrategy(BaseLearningStrategy):
     Attributes
     ----------
     foresight : int
-        Number of time steps for which the agent forecasts market conditions. Defaults to 24.
+        Number of time steps for which the agent forecasts market conditions. Defaults to 12.
     max_bid_price : float
         Maximum allowable bid price. Defaults to 100.
-    max_demand : float
-        Maximum demand capacity of the unit. Defaults to 10e3.
     device : str
         Device for computation, such as "cpu" or "cuda". Defaults to "cpu".
     float_type : str
@@ -346,8 +361,6 @@ class RLStrategy(BaseLearningStrategy):
         Class of the neural network architecture used for the actor network. Defaults to MLPActor.
     actor : torch.nn.Module
         Actor network for determining actions.
-    order_types : list[str]
-        Types of market orders supported by the strategy. Defaults to ["SB"].
     action_noise : NormalActionNoise
         Noise model added to actions during learning to encourage exploration. Defaults to None.
     collect_initial_experience_mode : bool
@@ -360,26 +373,18 @@ class RLStrategy(BaseLearningStrategy):
     """
 
     def __init__(self, *args, **kwargs):
-        obs_dim = kwargs.pop("obs_dim", 38)
+        # 'foresight' represents the number of time steps into the future that we will consider
+        # when constructing the observations.
+        foresight = kwargs.pop("foresight", 12)
         act_dim = kwargs.pop("act_dim", 2)
         unique_obs_dim = kwargs.pop("unique_obs_dim", 2)
         super().__init__(
-            obs_dim=obs_dim,
+            foresight=foresight,
             act_dim=act_dim,
             unique_obs_dim=unique_obs_dim,
             *args,
             **kwargs,
         )
-
-        # 'foresight' represents the number of time steps into the future that we will consider
-        # when constructing the observations. This value is fixed for each strategy, as the
-        # neural network architecture is predefined, and the size of the observations must remain consistent.
-        # If you wish to modify the foresight length, remember to also update the 'obs_dim' parameter above,
-        # as the observation dimension depends on the foresight value.
-        self.foresight = 12
-
-        # define allowed order types
-        self.order_types = kwargs.get("order_types", ["SB"])
 
     def calculate_bids(
         self,
@@ -477,13 +482,8 @@ class RLStrategy(BaseLearningStrategy):
             },
         ]
 
-        # store results in unit outputs as lists to be written to the buffer for learning
-        unit.outputs["rl_observations"].append(next_observation)
-        unit.outputs["rl_actions"].append(actions)
-
-        # store results in unit outputs as series to be written to the database by the unit operator
-        unit.outputs["actions"].at[start] = actions
-        unit.outputs["exploration_noise"].at[start] = noise
+        if self.learning_mode:
+            self.learning_role.add_actions_to_cache(self.unit_id, start, actions, noise)
 
         return bids
 
@@ -591,7 +591,7 @@ class RLStrategy(BaseLearningStrategy):
 
         start = orderbook[0]["start_time"]
         end = orderbook[0]["end_time"]
-        # `end_excl` marks the last product's start time by subtracting one frequency interval.
+        # end includes the end of the last product, to get the last products' start time we deduct the frequency once
         end_excl = end - unit.index.freq
 
         # Depending on how the unit calculates marginal costs, retrieve cost values.
@@ -638,11 +638,17 @@ class RLStrategy(BaseLearningStrategy):
         profit = income - operational_cost
 
         # Stabilizing learning: Limit positive profit to 10% of its absolute value.
-        # This reduces variance in rewards and prevents overfitting to extreme profit-seeking behavior.
+        # This reduces variance in rewards and avoids extreme profit-seeking behavior.
         # However, this does NOT prevent the agent from exploiting market inefficiencies if they exist.
-        # RL by nature identifies and exploits system weaknesses if they lead to higher profit.
-        # This is not a price cap but rather a stabilizing factor to avoid reward spikes affecting learning stability.
-        profit = min(profit, 0.1 * abs(profit))
+        # This leads to the agent learning to bid close to marginal costs to ensure acceptance,
+        # while still being able to capitalize on any market inefficiencies that may arise.
+        # However this will lead the learning agents to converge to the market price they should bid from below marginal costs.
+        # We only advise using this if profits can spike extremely high due to market conditions, or many learning units enter tactic collusion.
+        # IMPORTANT: This is a clear case of reward_tuning to stabilize learning - Use with caution!
+        # profit_scale= 0.1
+
+        profit_scale = 1
+        profit = min(profit, profit_scale * abs(profit))
 
         # Opportunity cost: The income lost due to not operating at full capacity.
         opportunity_cost = (
@@ -666,35 +672,38 @@ class RLStrategy(BaseLearningStrategy):
 
         # scaling factor to normalize the reward to the range [-1,1]
         scaling = 1 / (self.max_bid_price * unit.max_power)
+        regret = regret_scale * opportunity_cost
+        reward = scaling * (profit - regret)
 
-        reward = scaling * (profit - regret_scale * opportunity_cost)
-
-        # Store results in unit outputs, which are later written to the database by the unit operator.
+        # Store results in unit outputs
+        # Note: these are not learning-specific results but stored for all units for analysis
         unit.outputs["profit"].loc[start:end_excl] += profit
-        unit.outputs["reward"].loc[start:end_excl] = reward
-        unit.outputs["regret"].loc[start:end_excl] = regret_scale * opportunity_cost
-        unit.outputs["total_costs"].loc[start:end_excl] = operational_cost
+        unit.outputs["total_costs"].loc[start:end_excl] += operational_cost
 
-        unit.outputs["rl_rewards"].append(reward)
+        # write rl-rewards to buffer
+        if self.learning_mode:
+            self.learning_role.add_reward_to_cache(
+                unit.id, start, reward, regret, profit
+            )
 
 
-class RLStrategySingleBid(RLStrategy):
+class EnergyLearningSingleBidStrategy(EnergyLearningStrategy, MinMaxStrategy):
     """
     Reinforcement Learning Strategy with Single-Bid Structure for Energy-Only Markets.
 
-    This strategy is a simplified variant of the standard `RLStrategy`, which typically submits two
+    This strategy is a simplified variant of the standard `EnergyLearningStrategy`, which typically submits two
     separate price bids for inflexible (P_min) and flexible (P_max - P_min) components. Instead,
-    `RLStrategySingleBid` submits a single bid that always offers the unit's maximum power,
+    `EnergyLearningSingleBidStrategy` submits a single bid that always offers the unit's maximum power,
     effectively treating the full capacity as inflexible from a bidding perspective.
 
     The core reinforcement learning mechanics, including the observation structure, actor network
-    architecture, and reward formulation, remain consistent with the two-bid `RLStrategy`. However,
+    architecture, and reward formulation, remain consistent with the two-bid `EnergyLearningStrategy`. However,
     this strategy modifies the action space to produce only a single bid price, and omits the
     decomposition of capacity into flexible and inflexible parts.
 
     Attributes
     ----------
-    Inherits all attributes from RLStrategy, with the exception of:
+    Inherits all attributes from EnergyLearningStrategy, with the exception of:
     - act_dim : int
         Reduced to 1 to reflect single bid pricing.
     - foresight : int
@@ -703,19 +712,17 @@ class RLStrategySingleBid(RLStrategy):
     """
 
     def __init__(self, *args, **kwargs):
-        obs_dim = kwargs.pop("obs_dim", 74)
+        # we select 24 to be in line with the storage strategies
+        foresight = kwargs.pop("foresight", 24)
         act_dim = kwargs.pop("act_dim", 1)
         unique_obs_dim = kwargs.pop("unique_obs_dim", 2)
         super().__init__(
-            obs_dim=obs_dim,
+            foresight=foresight,
             act_dim=act_dim,
             unique_obs_dim=unique_obs_dim,
             *args,
             **kwargs,
         )
-
-        # we select 24 to be in line with the storage strategies
-        self.foresight = 24
 
     def calculate_bids(
         self,
@@ -777,23 +784,18 @@ class RLStrategySingleBid(RLStrategy):
             },
         ]
 
-        # store results in unit outputs as lists to be written to the buffer for learning
-        unit.outputs["rl_observations"].append(next_observation)
-        unit.outputs["rl_actions"].append(actions)
-
-        # store results in unit outputs as series to be written to the database by the unit operator
-        unit.outputs["actions"].at[start] = actions
-        unit.outputs["exploration_noise"].at[start] = noise
+        if self.learning_mode:
+            self.learning_role.add_actions_to_cache(self.unit_id, start, actions, noise)
 
         return bids
 
 
-class StorageRLStrategy(BaseLearningStrategy):
+class StorageEnergyLearningStrategy(TorchLearningStrategy, MinMaxChargeStrategy):
     """
     Reinforcement Learning Strategy for a storage unit that enables the agent to learn
     optimal bidding strategies on an Energy-Only Market.
 
-    The observation space for this strategy consists of 50 elements. Key components include:
+    The observation space for this strategy consists of 74 elements. Key components include:
 
     - **State of Charge**: Represents the current level of energy in the storage unit,
       influencing the bid direction and capacity.
@@ -826,8 +828,6 @@ class StorageRLStrategy(BaseLearningStrategy):
         Number of time steps for forecasting market conditions. Defaults to 24.
     max_bid_price : float
         Maximum allowable bid price. Defaults to 100.
-    max_demand : float
-        Maximum demand capacity of the storage. Defaults to 10e3.
     device : str
         Device used for computation ("cpu" or "cuda"). Defaults to "cpu".
     float_type : str
@@ -840,8 +840,6 @@ class StorageRLStrategy(BaseLearningStrategy):
         Class of the neural network for the actor network. Defaults to MLPActor.
     actor : torch.nn.Module
         The neural network used to predict actions.
-    order_types : list[str]
-        Types of market orders used by the strategy. Defaults to ["SB"].
     action_noise : NormalActionNoise
         Noise model added to actions during learning for exploration. Defaults to None.
     collect_initial_experience_mode : bool
@@ -854,26 +852,18 @@ class StorageRLStrategy(BaseLearningStrategy):
     """
 
     def __init__(self, *args, **kwargs):
-        obs_dim = kwargs.pop("obs_dim", 74)
+        # 'foresight' represents the number of time steps into the future that we will consider
+        # when constructing the observations.
+        foresight = kwargs.pop("foresight", 24)
         act_dim = kwargs.pop("act_dim", 1)
         unique_obs_dim = kwargs.pop("unique_obs_dim", 2)
         super().__init__(
-            obs_dim=obs_dim,
+            foresight=foresight,
             act_dim=act_dim,
             unique_obs_dim=unique_obs_dim,
             *args,
             **kwargs,
         )
-
-        # 'foresight' represents the number of time steps into the future that we will consider
-        # when constructing the observations. This value is fixed for each strategy, as the
-        # neural network architecture is predefined, and the size of the observations must remain consistent.
-        # If you wish to modify the foresight length, remember to also update the 'obs_dim' parameter above,
-        # as the observation dimension depends on the foresight value.
-        self.foresight = 24
-
-        # define allowed order types
-        self.order_types = kwargs.get("order_types", ["SB"])
 
     def get_individual_observations(
         self, unit: SupportsMinMaxCharge, start: datetime, end: datetime
@@ -900,12 +890,12 @@ class StorageRLStrategy(BaseLearningStrategy):
         the agent's action selection.
         """
         # get the current soc and energy cost value
-        soc_scaled = unit.outputs["soc"].at[start] / unit.max_soc
+        soc = unit.outputs["soc"].at[start]
         cost_stored_energy_scaled = (
             unit.outputs["cost_stored_energy"].at[start] / self.max_bid_price
         )
 
-        individual_observations = np.array([soc_scaled, cost_stored_energy_scaled])
+        individual_observations = np.array([soc, cost_stored_energy_scaled])
 
         return individual_observations
 
@@ -997,12 +987,8 @@ class StorageRLStrategy(BaseLearningStrategy):
                 }
             )
 
-        unit.outputs["rl_observations"].append(next_observation)
-        unit.outputs["rl_actions"].append(actions)
-
-        # store results in unit outputs as series to be written to the database by the unit operator
-        unit.outputs["actions"].at[start] = actions
-        unit.outputs["exploration_noise"].at[start] = noise
+        if self.learning_mode:
+            self.learning_role.add_actions_to_cache(self.unit_id, start, actions, noise)
 
         return bids
 
@@ -1035,7 +1021,7 @@ class StorageRLStrategy(BaseLearningStrategy):
         # that the strategy is not designed for multiple orders and the market configuration should be adjusted
         if len(orderbook) > 1:
             raise ValueError(
-                "StorageRLStrategy is not designed for multiple orders. Please adjust the market configuration or the strategy."
+                "StorageEnergyLearningStrategy is not designed for multiple orders. Please adjust the market configuration or the strategy."
             )
 
         order = orderbook[0]
@@ -1067,15 +1053,17 @@ class StorageRLStrategy(BaseLearningStrategy):
 
         # Calculate and clip the energy cost for the start time
         # cost_stored_energy = average volume-weighted procurement costs of the currently stored energy
-        if next_soc < 1:
+        if next_soc * unit.capacity < 1:
             unit.outputs["cost_stored_energy"].at[next_time] = 0
         elif accepted_volume < 0:
             # increase costs of current SoC by price for buying energy
             # not fully representing the true cost per MWh (e.g. omitting discharge efficiency losses), but serving as a proxy for it
             unit.outputs["cost_stored_energy"].at[next_time] = (
-                unit.outputs["cost_stored_energy"].at[start] * current_soc
+                unit.outputs["cost_stored_energy"].at[start]
+                * current_soc
+                * unit.capacity
                 - (accepted_price + marginal_cost) * accepted_volume * duration_hours
-            ) / next_soc
+            ) / (next_soc * unit.capacity)
         else:
             unit.outputs["cost_stored_energy"].at[next_time] = unit.outputs[
                 "cost_stored_energy"
@@ -1095,13 +1083,16 @@ class StorageRLStrategy(BaseLearningStrategy):
         reward += scaling_factor * profit
 
         # Store results in unit outputs
+        # Note: these are not learning-specific results but stored for all units for analysis
         unit.outputs["profit"].loc[start:end_excl] += profit
-        unit.outputs["reward"].loc[start:end_excl] = reward
-        unit.outputs["total_costs"].loc[start:end_excl] = order_cost
-        unit.outputs["rl_rewards"].append(reward)
+        unit.outputs["total_costs"].loc[start:end_excl] += order_cost
+
+        # write rl-rewards to buffer
+        if self.learning_mode:
+            self.learning_role.add_reward_to_cache(unit.id, start, reward, 0, profit)
 
 
-class RenewableRLStrategy(RLStrategySingleBid):
+class RenewableEnergyLearningSingleBidStrategy(EnergyLearningSingleBidStrategy):
     """
     Reinforcement Learning Strategy for a renewable unit that enables the agent to learn
     optimal bidding strategies on an Energy-Only Market.
@@ -1141,8 +1132,6 @@ class RenewableRLStrategy(RLStrategySingleBid):
         Class of the neural network for the actor network. Defaults to MLPActor.
     actor : torch.nn.Module
         The neural network used to predict actions.
-    order_types : list[str]
-        Types of market orders used by the strategy. Defaults to ["SB"].
     action_noise : NormalActionNoise
         Noise model added to actions during learning for exploration. Defaults to None.
     collect_initial_experience_mode : bool
@@ -1155,26 +1144,18 @@ class RenewableRLStrategy(RLStrategySingleBid):
     """
 
     def __init__(self, *args, **kwargs):
-        obs_dim = kwargs.pop("obs_dim", 75)
+        # 'foresight' represents the number of time steps into the future that we will consider
+        # when constructing the observations.
+        foresight = kwargs.pop("foresight", 24)
         act_dim = kwargs.pop("act_dim", 1)
         unique_obs_dim = kwargs.pop("unique_obs_dim", 3)
         super().__init__(
-            obs_dim=obs_dim,
+            foresight=foresight,
             act_dim=act_dim,
             unique_obs_dim=unique_obs_dim,
             *args,
             **kwargs,
         )
-
-        # 'foresight' represents the number of time steps into the future that we will consider
-        # when constructing the observations. This value is fixed for each strategy, as the
-        # neural network architecture is predefined, and the size of the observations must remain consistent.
-        # If you wish to modify the foresight length, remember to also update the 'obs_dim' parameter above,
-        # as the observation dimension depends on the foresight value.
-        self.foresight = 24
-
-        # define allowed order types
-        self.order_types = kwargs.get("order_types", ["SB"])
 
     def get_individual_observations(
         self, unit: SupportsMinMaxCharge, start: datetime, end: datetime
@@ -1210,7 +1191,7 @@ class RenewableRLStrategy(RLStrategySingleBid):
         scaled_available_power = available_power[0] / unit.max_power
 
         individual_observations = np.array(
-            [scaled_total_dispatch, scaled_marginal_cost, scaled_available_power]
+            [scaled_total_dispatch, scaled_available_power, scaled_marginal_cost]
         )
 
         return individual_observations
@@ -1295,12 +1276,16 @@ class RenewableRLStrategy(RLStrategySingleBid):
 
         profit = income - operational_cost
 
-        # Stabilizing learning: Limit positive profit to 10% of its absolute value.
+        # Stabilizing learning: Limit positive profit to 50% of its absolute value.
         # This reduces variance in rewards and prevents overfitting to extreme profit-seeking behavior.
         # However, this does NOT prevent the agent from exploiting market inefficiencies if they exist.
         # RL by nature identifies and exploits system weaknesses if they lead to higher profit.
         # This is not a price cap but rather a stabilizing factor to avoid reward spikes affecting learning stability.
-        profit = min(profit, 0.5 * abs(profit))
+        # IMPORTANT: This is a clear case of reward_tuning to stabilize learning - Use with caution!
+        # profit_scale = 0.5
+
+        profit_scale = 1
+        profit = min(profit, profit_scale * abs(profit))
 
         # get potential maximum infeed according to availability from order volume
         # Note: this will only work as the correct reference point when the volume is not defined by an action
@@ -1333,12 +1318,16 @@ class RenewableRLStrategy(RLStrategySingleBid):
         else:
             scaling = 1 / (self.max_bid_price * available_power)
 
-        reward = scaling * (profit - regret_scale * opportunity_cost)
+        regret = regret_scale * opportunity_cost
+        reward = scaling * (profit - regret)
 
-        # Store results in unit outputs, which are later written to the database by the unit operator.
+        # Store results in unit outputs
+        # Note: these are not learning-specific results but stored for all units for analysis
         unit.outputs["profit"].loc[start:end_excl] += profit
-        unit.outputs["reward"].loc[start:end_excl] = reward
-        unit.outputs["regret"].loc[start:end_excl] = regret_scale * opportunity_cost
-        unit.outputs["total_costs"].loc[start:end_excl] = operational_cost
+        unit.outputs["total_costs"].loc[start:end_excl] += operational_cost
 
-        unit.outputs["rl_rewards"].append(reward)
+        # write rl-rewards to buffer
+        if self.learning_mode:
+            self.learning_role.add_reward_to_cache(
+                unit.id, start, reward, regret, profit
+            )

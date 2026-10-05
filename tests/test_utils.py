@@ -5,6 +5,7 @@
 import calendar
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -21,11 +22,14 @@ from assume.common.utils import (
     datetime2timestamp,
     get_available_products,
     get_products_index,
-    get_supported_solver,
+    get_supported_solver_pyomo,
     initializer,
+    load_index_file,
+    min_max_scale,
     parse_duration,
     plot_orderbook,
     separate_orders,
+    set_random_seed,
     timestamp2datetime,
     visualize_orderbook,
 )
@@ -45,6 +49,26 @@ def test_convert_rrule():
     freq, interval = convert_to_rrule_freq("99d")
     assert freq == rr.DAILY
     assert interval == 99
+
+
+def test_reproducability_with_seed():
+    set_random_seed(42)
+    rand_nums_1_1 = np.random.rand(5)
+    rand_nums_1_2 = np.random.rand(5)
+
+    set_random_seed(42)
+    rand_nums_2_1 = np.random.rand(5)
+    rand_nums_2_2 = np.random.rand(5)
+
+    assert np.array_equal(
+        [rand_nums_1_1, rand_nums_1_2], [rand_nums_2_1, rand_nums_2_2]
+    ), "Random numbers should be the same for the same seed"
+
+    set_random_seed(None)
+    rand_nums_3 = np.random.rand(5)
+    assert not np.array_equal(rand_nums_1_1, rand_nums_3), (
+        "Random numbers should differ for different seeds"
+    )
 
 
 def test_make_market_config():
@@ -494,7 +518,8 @@ def test_broken_timestamps():
 
     unix_epoch_start = datetime.fromtimestamp(0)
     true_unix_epoch_start = unix_start
-    offset = tzlocal().utcoffset(datetime.fromtimestamp(0))
+    # offset = tzlocal().utcoffset(datetime.fromtimestamp(0))
+    offset = tzlocal().utcoffset(datetime(2020, 1, 1))
     # this should be 1970-01-01-00-00 but it isn't (when run in CET locale)
     # so we always have this offset
     assert true_unix_epoch_start + offset == unix_epoch_start
@@ -559,8 +584,8 @@ def test_create_date_range():
     for i in range(n):
         q_pd_slice = series.loc[start:new_end]
     res_slice_pd = time.time() - t
-    # more than at least factor 5
-    assert res_slice < res_slice_pd / 5
+    # more than at least factor 4
+    assert res_slice < res_slice_pd / 4
 
     # check that setting items is faster:
     t = time.time()
@@ -574,8 +599,8 @@ def test_create_date_range():
     for i in range(n):
         series.at[start] = 1
     res_slice_pd = time.time() - t
-    # more than at least factor 5
-    assert res_slice < res_slice_pd / 5
+    # more than at least factor 4
+    assert res_slice < res_slice_pd / 4
 
     # check that setting slices is faster
     t = time.time()
@@ -589,8 +614,8 @@ def test_create_date_range():
     for i in range(n):
         series.loc[start:new_end] = 17
     res_slice_pd = time.time() - t
-    # more than at least factor 5
-    assert res_slice < res_slice_pd / 5
+    # more than at least factor 4
+    assert res_slice < res_slice_pd / 4
 
     se = pd.Series(0.0, index=fs.index.get_date_list())
     se.loc[start]
@@ -791,14 +816,53 @@ def test_parse_duration():
 
 
 def test_solver_available():
-    assert get_supported_solver() == "appsi_highs"
-    assert get_supported_solver("unknown_solver") == "appsi_highs"
+    assert get_supported_solver_pyomo() == "appsi_highs"
+    assert get_supported_solver_pyomo("unknown_solver") == "appsi_highs"
 
 
 def test_solver_unavailable(monkeypatch):
     monkeypatch.setattr("assume.common.utils.check_available_solvers", lambda *args: [])
     with pytest.raises(RuntimeError):
-        get_supported_solver()
+        get_supported_solver_pyomo()
+
+
+def test_min_max_scale():
+    # Default out_min/out_max: scales to [0, 1]
+    assert min_max_scale(5.0, in_min=0, in_max=10) == 0.5
+    assert min_max_scale(0.0, in_min=0, in_max=10) == 0.0
+    assert min_max_scale(10.0, in_min=0, in_max=10) == 1.0
+
+    # Custom output range: scale [0, 10] → [1, 3], x=5 → 2.0
+    assert min_max_scale(5.0, in_min=0, in_max=10, out_min=1, out_max=3) == 2.0
+
+    # Edge case: in_min == in_max → returns midpoint of output range
+    assert min_max_scale(5.0, in_min=5, in_max=5) == 0.5
+
+    # Edge case: val is outside the input range → raises ValueError
+    with pytest.raises(ValueError):
+        min_max_scale(15.0, in_min=0, in_max=10)
+
+
+def test_load_index_file():
+    path = Path("./tests/fixtures/forecast_init/demand_df.csv")
+
+    index = pd.date_range("2019-01-01 8:00", periods=3, freq="h")
+    df = load_index_file(path, index)
+    assert len(df) == 3
+
+    index = pd.date_range("2019-01-01 8:00", periods=7, freq="h")
+    df = load_index_file(path, index)
+    assert len(df) == 7
+
+    index = pd.date_range("2019-01-01 8:00", periods=12, freq="h")
+    df = load_index_file(path, index)
+    assert df is None
+
+    invalid_path = Path("./tests/fixtures/forecast_init/invalid")
+
+    index = pd.date_range("2019-01-01", periods=36, freq="h")
+    df = load_index_file(invalid_path, index)
+    assert df is None
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ import pyomo.environ as pyo
 from pyomo.opt import SolverFactory, check_available_solvers
 from pyomo.opt.base.solvers import SolverFactoryClass
 
-from assume.common.base import BaseStrategy, SupportsMinMaxCharge
+from assume.common.base import MinMaxChargeStrategy, SupportsMinMaxCharge
 from assume.common.market_objects import MarketConfig, Orderbook, Product
 
 
@@ -105,7 +105,7 @@ def get_solver_factory(
     return SolverFactory(solvers[0])
 
 
-class DmasStorageStrategy(BaseStrategy):
+class StorageEnergyOptimizationDmasStrategy(MinMaxChargeStrategy):
     """Strategy for a storage unit that uses DMAS to optimize its operation"""
 
     def __init__(self, *args, **kwargs):
@@ -139,7 +139,7 @@ class DmasStorageStrategy(BaseStrategy):
             time_range, within=pyo.Reals, bounds=(0, unit.max_power_discharge)
         )
         self.model.volume = pyo.Var(
-            time_range, within=pyo.NonNegativeReals, bounds=(0, unit.max_soc)
+            time_range, within=pyo.NonNegativeReals, bounds=(0, unit.capacity)
         )
 
         self.power = np.array(
@@ -151,7 +151,7 @@ class DmasStorageStrategy(BaseStrategy):
         )
 
         self.model.vol_con = pyo.ConstraintList()
-        v0 = unit.outputs["soc"].at[start]
+        v0 = unit.outputs["soc"].at[start] * unit.capacity
 
         for t in time_range:
             if t == 0:
@@ -162,7 +162,7 @@ class DmasStorageStrategy(BaseStrategy):
                 )
 
         # always end with half full SoC
-        self.model.vol_con.add(self.model.volume[hour_count - 1] == unit.max_soc / 2)
+        self.model.vol_con.add(self.model.volume[hour_count - 1] == unit.capacity / 2)
         return self.power
 
     def optimize(
@@ -186,7 +186,7 @@ class DmasStorageStrategy(BaseStrategy):
         opt_results = {key: np.zeros(hour_count) for key in PRICE_FUNCS.keys()}
         time_range = range(hour_count)
 
-        base_price = unit.forecaster[f"price_{market_id}"][
+        base_price = unit.forecaster.price[market_id][
             start : start + timedelta(hours=hour_count)
         ]
 
@@ -255,7 +255,7 @@ class DmasStorageStrategy(BaseStrategy):
         )
         total_orders = {}
         block_id = 0
-        power_prices = unit.forecaster[f"price_{market_config.market_id}"][
+        power_prices = unit.forecaster.price[market_config.market_id][
             start : start + timedelta(hours=hour_count)
         ]
         for key, power in opt_results.items():

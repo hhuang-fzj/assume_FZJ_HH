@@ -11,6 +11,7 @@ from operator import itemgetter
 from mango import Role, create_acl, sender_addr
 from mango.messages.message import Performatives
 
+from assume.common.forecaster import UnitsOperatorForecaster
 from assume.common.market_objects import (
     ClearingMessage,
     DataRequestMessage,
@@ -25,7 +26,10 @@ from assume.common.utils import (
     aggregate_step_amount,
     timestamp2datetime,
 )
-from assume.strategies import DirectUnitOperatorStrategy, UnitOperatorStrategy
+from assume.strategies import (
+    UnitOperatorStrategy,
+    UnitsOperatorDirectStrategy,
+)
 from assume.units import BaseUnit
 
 logger = logging.getLogger(__name__)
@@ -49,24 +53,28 @@ class UnitsOperator(Role):
     Args:
         available_markets (list[MarketConfig]): The available markets.
         portfolio_strategies (dict[str, UnitOperatorStrategy], optional): Optimized portfolio strategy. Defaults to an empty dict.
+        forecaster (UnitsOperatorForecaster, optional): Operator-level forecaster providing market
+            price and residual load forecasts shared across the operator's units. Defaults to None.
     """
 
     def __init__(
         self,
         available_markets: list[MarketConfig],
         portfolio_strategies: dict[str, UnitOperatorStrategy] = {},
+        forecaster: UnitsOperatorForecaster = None,
     ):
         super().__init__()
 
         self.available_markets = available_markets
         self.registered_markets: dict[str, MarketConfig] = {}
         self.last_sent_dispatch = defaultdict(lambda: 0)
+        self.forecaster = forecaster
 
         self.portfolio_strategies = portfolio_strategies
         for market in self.available_markets:
             if market.market_id not in self.portfolio_strategies.keys():
                 self.portfolio_strategies[market.market_id] = (
-                    DirectUnitOperatorStrategy()
+                    UnitsOperatorDirectStrategy()
                 )
 
         # valid_orders per product_type
@@ -239,11 +247,6 @@ class UnitsOperator(Role):
         # we can calculate the cashflow and reward for the units
         self.calculate_unit_cashflow_and_reward(orderbook, marketconfig)
 
-        # if unit operator is a subclass of learning unit operator
-        # we need to write the learning data to the output agent
-        if hasattr(self, "write_learning_to_output"):
-            self.write_learning_to_output(orderbook, marketconfig.market_id)
-
     def handle_registration_feedback(
         self, content: RegistrationMessage, meta: MetaDict
     ) -> None:
@@ -335,11 +338,18 @@ class UnitsOperator(Role):
         """
         orderbook.sort(key=itemgetter("unit_id"))
         for unit_id, orders in groupby(orderbook, itemgetter("unit_id")):
-            orderbook = list(orders)
+            unit_orders = list(orders)
             self.units[unit_id].calculate_cashflow_and_reward(
                 marketconfig=marketconfig,
-                orderbook=orderbook,
+                orderbook=unit_orders,
             )
+
+        # Calculate reward for the portfolio strategy
+        self.portfolio_strategies.get(marketconfig.market_id).calculate_reward(
+            units_operator=self,
+            marketconfig=marketconfig,
+            orderbook=orderbook,
+        )
 
     def get_actual_dispatch(
         self, product_type: str, last: datetime
@@ -462,6 +472,7 @@ class UnitsOperator(Role):
             market_config=market,
             product_tuples=products,
         )
+
         if not market.addr:
             logger.error("Market %s has no address", market.market_id)
             return

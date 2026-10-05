@@ -5,12 +5,15 @@
 import logging
 from datetime import timedelta
 
-import pandas as pd
 import pypsa
 from dateutil import rrule as rr
 
 from assume import World
-from assume.common.forecasts import NaiveForecast
+from assume.common.forecaster import (
+    DemandForecaster,
+    PowerplantForecaster,
+    UnitForecaster,
+)
 from assume.common.market_objects import MarketConfig, MarketProduct
 
 logger = logging.getLogger(__name__)
@@ -90,7 +93,9 @@ def load_pypsa(
             unit_type,
             "powerplant_operator",
             {
-                "min_power": generator.p_nom_min,
+                "min_power": max_power * generator.p_min_pu
+                if generator.p_min_pu is not None
+                else 0,
                 "max_power": max_power,
                 "bidding_strategies": bidding_strategies[unit_type][generator.name],
                 "technology": "conventional",
@@ -99,12 +104,12 @@ def load_pypsa(
                 "fuel_type": generator.carrier,
                 "ramp_up": ramp_up,
                 "ramp_down": ramp_down,
-                "min_operating_time": generator.min_up_time,
-                "min_down_time": generator.min_down_time,
+                "min_operating_time": generator.min_up_time or 1,
+                "min_down_time": generator.min_down_time or 1,
             },
-            NaiveForecast(
+            PowerplantForecaster(
                 index,
-                fuel_price=generator.marginal_cost,
+                fuel_prices={generator.carrier: generator.marginal_cost},
                 availability=av,
             ),
         )
@@ -118,21 +123,22 @@ def load_pypsa(
         load_t = network.loads_t["p_set"][load.name]
         unit_type = "demand"
 
-        kwargs = {load.name: load_t}
-
         world.add_unit(
             load.name,
             unit_type,
             "demand_operator",
             {
                 "min_power": 0,
-                "max_power": load_t.max(),
+                "max_power": -load_t.max(),
                 "bidding_strategies": bidding_strategies[unit_type][load.name],
                 "technology": "demand",
                 "node": load.node,
                 "price": 1e3,
             },
-            NaiveForecast(index, demand=load_t, **kwargs),
+            DemandForecaster(
+                index,
+                demand=-abs(load_t),
+            ),
         )
 
     world.add_unit_operator("storage_operator")
@@ -144,8 +150,16 @@ def load_pypsa(
             continue
 
         unit_type = "storage"
-        max_power_charge = storage.p_nom * storage.p_min_pu
-        max_power_discharge = storage.p_nom * storage.p_max_pu
+        max_power_charge = (
+            storage.p_nom * storage.p_min_pu
+            if storage.p_min_pu is not None
+            else storage.p_nom
+        )
+        max_power_discharge = (
+            storage.p_nom * storage.p_max_pu
+            if storage.p_max_pu is not None
+            else storage.p_nom
+        )
 
         world.add_unit(
             f"StorageTrader_{storage.name}",
@@ -157,14 +171,16 @@ def load_pypsa(
                 "efficiency_charge": storage.efficiency_store,
                 "efficiency_discharge": storage.efficiency_dispatch,
                 "initial_soc": storage.state_of_charge_initial,
-                "max_soc": storage.p_nom,
+                "capacity": storage.p_nom * storage.max_hours,
                 "bidding_strategies": bidding_strategies[unit_type][storage.name],
-                "technology": "hydro",
-                "emission_factor": 0,
+                "technology": storage.carrier,
+                "emission_factor": storage.emission_factor or 0,
                 "node": storage.bus,
             },
-            NaiveForecast(index, fuel_price=storage.marginal_cost),
+            UnitForecaster(index),
         )
+
+    world.init_forecasts()
 
 
 if __name__ == "__main__":
@@ -177,14 +193,18 @@ if __name__ == "__main__":
 
     match study_case:
         case "ac_dc_meshed":
-            network = pypsa.examples.ac_dc_meshed(from_master=True)
+            network = pypsa.examples.ac_dc_meshed()
         case "scigrid_de":
-            network = pypsa.examples.scigrid_de(True, from_master=True)
+            network = pypsa.examples.scigrid_de()
         case "storage_hvdc":
-            network = pypsa.examples.storage_hvdc(True)
+            network = pypsa.examples.storage_hvdc()
         case _:
-            logger.info(f"invalid studycase: {study_case}")
-            network = pd.DataFrame()
+            msg = f"invalid studycase: {study_case}"
+            logger.error(msg)
+            logger.error(
+                "Available STUDY_CASE options: ac_dc_meshed, scigrid_de, storage_hvdc"
+            )
+            raise ValueError(msg)
 
     study_case = f"{study_case}_{market_mechanism}"
 
@@ -192,7 +212,7 @@ if __name__ == "__main__":
     end = network.snapshots[-1]
     marketdesign = [
         MarketConfig(
-            "EOM",
+            "redispatch" if market_mechanism == "redispatch" else "EOM",
             rr.rrule(rr.HOURLY, interval=1, dtstart=start, until=end),
             timedelta(hours=1),
             market_mechanism,
@@ -223,7 +243,9 @@ if __name__ == "__main__":
         )
     default_strategies = {
         mc.market_id: (
-            "naive_redispatch" if mc.market_mechanism == "redispatch" else "naive_eom"
+            "powerplant_energy_naive_redispatch"
+            if mc.market_mechanism == "redispatch"
+            else "demand_energy_naive"
         )
         for mc in marketdesign
     }
@@ -232,10 +254,15 @@ if __name__ == "__main__":
     bidding_strategies = {
         "power_plant": defaultdict(lambda: default_strategies),
         "demand": defaultdict(
-            lambda: {mc.market_id: "naive_eom" for mc in marketdesign}
+            lambda: {mc.market_id: "demand_energy_naive" for mc in marketdesign}
         ),
         "storage": defaultdict(lambda: default_strategies),
     }
 
-    load_pypsa(world, scenario, study_case, network, marketdesign, bidding_strategies)
-    world.run()
+    try:
+        load_pypsa(
+            world, scenario, study_case, network, marketdesign, bidding_strategies
+        )
+        world.run()
+    except Exception:
+        logger.exception("Failed to load or run PyPSA scenario")

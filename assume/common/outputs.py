@@ -463,6 +463,7 @@ class WriteOutput(Role):
         for table, data_list in self.write_buffers.items():
             if len(data_list) == 0:
                 continue
+
             df = None
             with self.locks[table]:
                 if table == "grid_topology":

@@ -7,12 +7,12 @@ from datetime import datetime
 
 import numpy as np
 
-from assume.common.base import BaseStrategy, SupportsMinMaxCharge
+from assume.common.base import MinMaxChargeStrategy, SupportsMinMaxCharge
 from assume.common.market_objects import MarketConfig, Orderbook, Product
 from assume.common.utils import parse_duration
 
 
-class flexableEOMStorage(BaseStrategy):
+class StorageEnergyHeuristicFlexableStrategy(MinMaxChargeStrategy):
     """
     The strategy is analogue to the storage strategy in flexABLE.
 
@@ -120,7 +120,7 @@ class flexableEOMStorage(BaseStrategy):
                 current_power_charge,
                 min_power_charge,
             )
-            price_forecast = unit.forecaster[f"price_{market_config.market_id}"]
+            price_forecast = unit.forecaster.price[market_config.market_id]
 
             # calculate average price
             average_price = calculate_price_average(
@@ -153,14 +153,22 @@ class flexableEOMStorage(BaseStrategy):
             # calculate theoretic SOC
             time_delta = (end - start) / timedelta(hours=1)
             if bid_quantity + current_power > 0:
-                delta_soc = -(
-                    (bid_quantity + current_power)
-                    * time_delta
-                    / unit.efficiency_discharge
+                delta_soc = (
+                    -(
+                        (bid_quantity + current_power)
+                        * time_delta
+                        / unit.efficiency_discharge
+                    )
+                    / unit.capacity
                 )
             elif bid_quantity + current_power < 0:
-                delta_soc = -(
-                    (bid_quantity + current_power) * time_delta * unit.efficiency_charge
+                delta_soc = (
+                    -(
+                        (bid_quantity + current_power)
+                        * time_delta
+                        * unit.efficiency_charge
+                    )
+                    / unit.capacity
                 )
             else:
                 delta_soc = 0
@@ -484,7 +492,7 @@ class flexableEOMEV(BaseStrategy):
             unit.outputs["total_costs"].loc[start:end_excl] = costs
 
 
-class flexablePosCRMStorage(BaseStrategy):
+class StorageCapacityHeuristicBalancingPosStrategy(MinMaxChargeStrategy):
     """
     The strategy is analogue to the storage strategy in flexABLE.
 
@@ -493,6 +501,7 @@ class flexablePosCRMStorage(BaseStrategy):
 
     Attributes:
         foresight (datetime.timedelta): Foresight for the average price calculation.
+        reference_market (str): The market whose price forecast is used to calculate the specific revenue.
 
     Args:
         *args: Additional arguments.
@@ -504,6 +513,8 @@ class flexablePosCRMStorage(BaseStrategy):
 
         # check if kwargs contains crm_foresight argument
         self.foresight = parse_duration(kwargs.get("crm_foresight", "4h"))
+        # market used as reference for the specific revenue calculation
+        self.reference_market = kwargs.get("reference_market", "EOM")
 
     def calculate_bids(
         self,
@@ -565,7 +576,7 @@ class flexablePosCRMStorage(BaseStrategy):
                 marginal_cost=marginal_cost,
                 t=start,
                 foresight=self.foresight,
-                price_forecast=unit.forecaster[f"price_{market_config.market_id}"],
+                price_forecast=unit.forecaster.price[self.reference_market],
             )
 
             # if specific revenue is positive, bid specific_revenue
@@ -604,10 +615,13 @@ class flexablePosCRMStorage(BaseStrategy):
                 )
                 # calculate theoretic SOC
                 time_delta = (end - start) / timedelta(hours=1)
-                delta_soc = -(
-                    (bid_quantity + current_power)
-                    * time_delta
-                    / unit.efficiency_discharge
+                delta_soc = (
+                    -(
+                        (bid_quantity + current_power)
+                        * time_delta
+                        / unit.efficiency_discharge
+                    )
+                    / unit.capacity
                 )
                 theoretic_SOC += delta_soc
                 previous_power = bid_quantity + current_power
@@ -622,7 +636,7 @@ class flexablePosCRMStorage(BaseStrategy):
         return bids
 
 
-class flexableNegCRMStorage(BaseStrategy):
+class StorageCapacityHeuristicBalancingNegStrategy(MinMaxChargeStrategy):
     """
     A strategy that bids the energy_price or the capacity_price of the unit on the negative CRM(reserve market).
 
@@ -715,7 +729,7 @@ class flexableNegCRMStorage(BaseStrategy):
                 time_delta = (end - start) / timedelta(hours=1)
                 delta_soc = (
                     (bid_quantity + current_power) * time_delta * unit.efficiency_charge
-                )
+                ) / unit.capacity
                 theoretic_SOC += delta_soc
                 previous_power = bid_quantity + current_power
             else:

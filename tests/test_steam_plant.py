@@ -6,11 +6,10 @@ import pandas as pd
 import pytest
 
 from assume.common.fast_pandas import FastSeries
-from assume.common.forecasts import NaiveForecast
+from assume.common.forecaster import SteamgenerationForecaster
 from assume.strategies.naive_strategies import (
-    DSM_NegCRM_Strategy,
-    DSM_PosCRM_Strategy,
-    NaiveDADSMStrategy,
+    DsmCapacityHeuristicBalancingStrategy,
+    DsmEnergyOptimizationStrategy,
 )
 from assume.units.steam_generation_plant import SteamPlant
 
@@ -32,8 +31,9 @@ def steam_plant_components_with_hp():
 def steam_plant_with_hp(steam_plant_components_with_hp) -> SteamPlant:
     # Define the time index and forecast data
     index = pd.date_range("2023-01-01", periods=24, freq="h")
-    forecast = NaiveForecast(
-        index,
+    forecast = SteamgenerationForecaster(
+        index=index,
+        demand=0,
         electricity_price=[
             60,
             60,
@@ -60,16 +60,23 @@ def steam_plant_with_hp(steam_plant_components_with_hp) -> SteamPlant:
             60,
             60,
         ],
-        A360_thermal_demand=[100] * 24,  # Constant thermal demand
+        electricity_price_flex=0,
+        fuel_prices={},
+        thermal_demand=[100] * 24,
+        congestion_signal=0,
+        renewable_utilisation_signal=0,
+        thermal_storage_schedule=0,
+        availability=0,
+        market_prices={"EOM": 0},
     )
 
     # Define a bidding strategy for the hydrogen plant
     bidding_strategy = {
-        "EOM": NaiveDADSMStrategy(),
+        "EOM": DsmEnergyOptimizationStrategy(),
     }
 
     # Initialize the HydrogenPlant with the specified components, forecast, and strategy
-    return SteamPlant(
+    plant = SteamPlant(
         id="A360",
         unit_operator="test_operator",
         objective="min_variable_cost",
@@ -80,15 +87,18 @@ def steam_plant_with_hp(steam_plant_components_with_hp) -> SteamPlant:
         forecaster=forecast,
     )
 
+    plant.setup_model()
+    return plant
+
 
 def test_optimal_operation_without_flex_initialization_hp(steam_plant_with_hp):
     # Run the initial without-flexibility operation to populate opt_power_requirement
     steam_plant_with_hp.determine_optimal_operation_without_flex()
 
     # Check that opt_power_requirement is populated and of the correct type
-    assert (
-        steam_plant_with_hp.opt_power_requirement is not None
-    ), "opt_power_requirement should be populated"
+    assert steam_plant_with_hp.opt_power_requirement is not None, (
+        "opt_power_requirement should be populated"
+    )
     assert isinstance(steam_plant_with_hp.opt_power_requirement, FastSeries)
 
     # Create an instance of the model and switch to optimization mode
@@ -107,9 +117,9 @@ def test_optimal_operation_without_flex_initialization_hp(steam_plant_with_hp):
     for t in instance.time_steps:
         heat_pump_output = instance.dsm_blocks["heat_pump"].heat_out[t].value
         thermal_demand = instance.thermal_demand[t]
-        assert heat_pump_output == pytest.approx(
-            thermal_demand, rel=1e-3
-        ), f"Heat pump output does not meet thermal demand at time {t}"
+        assert heat_pump_output == pytest.approx(thermal_demand, rel=1e-3), (
+            f"Heat pump output does not meet thermal demand at time {t}"
+        )
 
 
 # Pytest with Heatpump & Boiler
@@ -140,8 +150,9 @@ def steam_plant_components_with_hp_b():
 def steam_plant_with_hp_b(steam_plant_components_with_hp_b) -> SteamPlant:
     # Define the time index and forecast data
     index = pd.date_range("2023-01-01", periods=24, freq="h")
-    forecast = NaiveForecast(
-        index,
+    forecast = SteamgenerationForecaster(
+        index=index,
+        demand=0,
         electricity_price=[
             60,
             60,
@@ -168,18 +179,23 @@ def steam_plant_with_hp_b(steam_plant_components_with_hp_b) -> SteamPlant:
             60,
             60,
         ],
-        hydrogen_gas_price=[55] * 24,
-        A360_thermal_demand=[100] * 24,  # Constant thermal demand
-        # test_steam_plant_congestion_signal=[0] * 24,  # No congestion
+        electricity_price_flex=0,
+        fuel_prices={},
+        thermal_demand=[100] * 24,
+        congestion_signal=0,
+        renewable_utilisation_signal=0,
+        thermal_storage_schedule=0,
+        availability=0,
+        market_prices={"EOM": 0},
     )
 
     # Define a bidding strategy for the hydrogen plant
     bidding_strategy = {
-        "EOM": NaiveDADSMStrategy(),
+        "EOM": DsmEnergyOptimizationStrategy(),
     }
 
     # Initialize the HydrogenPlant with the specified components, forecast, and strategy
-    return SteamPlant(
+    plant = SteamPlant(
         id="A360",
         unit_operator="test_operator",
         objective="min_variable_cost",
@@ -190,15 +206,19 @@ def steam_plant_with_hp_b(steam_plant_components_with_hp_b) -> SteamPlant:
         forecaster=forecast,
     )
 
+    plant.setup_model()
+
+    return plant
+
 
 def test_optimal_operation_without_flex_initialization_hp_b(steam_plant_with_hp_b):
     # Run the initial without-flexibility operation to populate opt_power_requirement
     steam_plant_with_hp_b.determine_optimal_operation_without_flex()
 
     # Check that opt_power_requirement is populated and of the correct type
-    assert (
-        steam_plant_with_hp_b.opt_power_requirement is not None
-    ), "opt_power_requirement should be populated"
+    assert steam_plant_with_hp_b.opt_power_requirement is not None, (
+        "opt_power_requirement should be populated"
+    )
     assert isinstance(steam_plant_with_hp_b.opt_power_requirement, FastSeries)
 
     # Create an instance of the model and switch to optimization mode
@@ -245,8 +265,9 @@ def steam_plant_components_with_hp_b_ts():
             "ramp_down": 50,
         },
         "thermal_storage": {
-            "max_capacity": 100,
-            "min_capacity": 0,
+            "capacity": 100,
+            "min_soc": 0,
+            "max_soc": 1,
             "max_power_charge": 50,
             "max_power_discharge": 50,
             "efficiency_charge": 1,
@@ -264,8 +285,9 @@ def steam_plant_components_with_hp_b_ts():
 def steam_plant_with_hp_b_ts(steam_plant_components_with_hp_b_ts) -> SteamPlant:
     # Define the time index and forecast data
     index = pd.date_range("2023-01-01", periods=24, freq="h")
-    forecast = NaiveForecast(
+    forecast = SteamgenerationForecaster(
         index,
+        demand=0,
         electricity_price=[
             60,
             60,
@@ -292,18 +314,23 @@ def steam_plant_with_hp_b_ts(steam_plant_components_with_hp_b_ts) -> SteamPlant:
             60,
             60,
         ],
-        natural_gas_price=[55] * 24,
-        A360_thermal_demand=[100] * 24,  # Constant thermal demand
-        # test_steam_plant_congestion_signal=[0] * 24,  # No congestion
+        electricity_price_flex=0,
+        fuel_prices={},
+        thermal_demand=[100] * 24,
+        congestion_signal=0,
+        renewable_utilisation_signal=0,
+        thermal_storage_schedule=0,
+        availability=0,
+        market_prices={"EOM": 0},
     )
 
     # Define a bidding strategy for the hydrogen plant
     bidding_strategy = {
-        "EOM": NaiveDADSMStrategy(),
+        "EOM": DsmEnergyOptimizationStrategy(),
     }
 
     # Initialize the HydrogenPlant with the specified components, forecast, and strategy
-    return SteamPlant(
+    plant = SteamPlant(
         id="A360",
         unit_operator="test_operator",
         objective="min_variable_cost",
@@ -314,6 +341,9 @@ def steam_plant_with_hp_b_ts(steam_plant_components_with_hp_b_ts) -> SteamPlant:
         forecaster=forecast,
     )
 
+    plant.setup_model()
+    return plant
+
 
 def test_optimal_operation_without_flex_initialization_hp_b_ts(
     steam_plant_with_hp_b_ts,
@@ -322,9 +352,9 @@ def test_optimal_operation_without_flex_initialization_hp_b_ts(
     steam_plant_with_hp_b_ts.determine_optimal_operation_without_flex()
 
     # Check that opt_power_requirement is populated and of the correct type
-    assert (
-        steam_plant_with_hp_b_ts.opt_power_requirement is not None
-    ), "opt_power_requirement should be populated"
+    assert steam_plant_with_hp_b_ts.opt_power_requirement is not None, (
+        "opt_power_requirement should be populated"
+    )
     assert isinstance(steam_plant_with_hp_b_ts.opt_power_requirement, FastSeries)
 
     # Create an instance of the model and switch to optimization mode
@@ -376,8 +406,9 @@ def steam_plant_components_with_hp_b_longterm_ts():
             "ramp_down": 50,
         },
         "thermal_storage": {
-            "max_capacity": 200,
-            "min_capacity": 0,
+            "capacity": 200,
+            "min_soc": 0,
+            "max_soc": 1,
             "max_power_charge": 40,
             "max_power_discharge": 50,
             "efficiency_charge": 1,
@@ -400,8 +431,9 @@ def steam_plant_with_hp_b_longterm_ts(
     steam_plant_components_with_hp_b_longterm_ts,
 ) -> SteamPlant:
     index = pd.date_range("2023-01-01", periods=24, freq="h")
-    forecast = NaiveForecast(
+    forecast = SteamgenerationForecaster(
         index,
+        demand=0,
         electricity_price=[
             60,
             60,
@@ -428,37 +460,44 @@ def steam_plant_with_hp_b_longterm_ts(
             60,
             60,
         ],
-        hydrogen_gas_price=[
-            55,
-            55,
-            40,
-            100,
-            20,
-            55,
-            40,
-            55,
-            60,
-            55,
-            55,
-            100,
-            100,
-            80,
-            55,
-            55,
-            55,
-            55,
-            55,
-            55,
-            55,
-            55,
-            55,
-            60,
-        ],
-        A360_thermal_demand=[100] * 24,
-        # add schedule if your forecaster expects it, but for thermal demand it's enough
+        electricity_price_flex=0,
+        fuel_prices={
+            "hydrogen": [
+                55,
+                55,
+                40,
+                100,
+                20,
+                55,
+                40,
+                55,
+                60,
+                55,
+                55,
+                100,
+                100,
+                80,
+                55,
+                55,
+                55,
+                55,
+                55,
+                55,
+                55,
+                55,
+                55,
+                60,
+            ]
+        },
+        thermal_demand=[100] * 24,
+        congestion_signal=0,
+        renewable_utilisation_signal=0,
+        thermal_storage_schedule=0,
+        availability=0,
+        market_prices={"EOM": 0},
     )
-    bidding_strategy = {"EOM": NaiveDADSMStrategy()}
-    return SteamPlant(
+    bidding_strategy = {"EOM": DsmEnergyOptimizationStrategy()}
+    plant = SteamPlant(
         id="A360",
         unit_operator="test_operator",
         objective="min_variable_cost",
@@ -468,6 +507,9 @@ def steam_plant_with_hp_b_longterm_ts(
         components=steam_plant_components_with_hp_b_longterm_ts,
         forecaster=forecast,
     )
+
+    plant.setup_model()
+    return plant
 
 
 def test_optimal_operation_with_longterm_storage(steam_plant_with_hp_b_longterm_ts):
@@ -505,11 +547,16 @@ def test_all_assets_coordinated(steam_plant_with_hp_b_ts):
     demand_profile = [20] * 10 + [60] + [20] * 13
 
     # Re-create the forecast object with new demand
-    new_forecast = NaiveForecast(
+    new_forecast = SteamgenerationForecaster(
         index,
         electricity_price=[60] * 24,  # adapt if needed
-        hydrogen_gas_price=[55] * 24,  # adapt if needed
-        A360_thermal_demand=demand_profile,
+        fuel_prices={"hydrogen_gas": [55] * 24},  # adapt if needed
+        thermal_demand=demand_profile,
+        demand=0,
+        electricity_price_flex=0,
+        congestion_signal=0,
+        renewable_utilisation_signal=0,
+        thermal_storage_schedule=0,
     )
     # Replace the forecaster of the plant with the new one
     steam_plant_with_hp_b_ts.forecaster = new_forecast
@@ -534,17 +581,24 @@ def test_all_assets_coordinated(steam_plant_with_hp_b_ts):
 @pytest.fixture
 def steam_plant_with_crm_flex(steam_plant_components_with_hp_b):
     index = pd.date_range("2023-01-01", periods=24, freq="h")
-    forecast = NaiveForecast(
+    forecast = SteamgenerationForecaster(
         index,
+        demand=0,
         electricity_price=[60] * 24,
-        hydrogen_gas_price=[55] * 24,
-        A360_thermal_demand=[100] * 24,
+        electricity_price_flex=0,
+        fuel_prices={},
+        thermal_demand=[100] * 24,
+        congestion_signal=0,
+        renewable_utilisation_signal=0,
+        thermal_storage_schedule=0,
+        availability=0,
+        market_prices={"EOM": 0},
     )
     bidding_strategy = {
-        "CRM_pos": DSM_PosCRM_Strategy(),
-        "CRM_neg": DSM_NegCRM_Strategy(),
+        "CRM_pos": DsmCapacityHeuristicBalancingStrategy(),
+        "CRM_neg": DsmCapacityHeuristicBalancingStrategy(),
     }
-    return SteamPlant(
+    plant = SteamPlant(
         id="A360",
         unit_operator="test_operator",
         objective="min_variable_cost",
@@ -554,6 +608,8 @@ def steam_plant_with_crm_flex(steam_plant_components_with_hp_b):
         components=steam_plant_components_with_hp_b,
         forecaster=forecast,
     )
+    plant.setup_model()
+    return plant
 
 
 def test_crm_block_flexibility_and_bidding(steam_plant_with_crm_flex):
@@ -576,13 +632,13 @@ def test_crm_block_flexibility_and_bidding(steam_plant_with_crm_flex):
         product_tuples.append((index[i], index[i + block_length], None))
 
     # --- POSITIVE CRM ---
-    pos_strategy = DSM_PosCRM_Strategy()
+    pos_strategy = DsmCapacityHeuristicBalancingStrategy()
     pos_bids = pos_strategy.calculate_bids(
         steam_plant_with_crm_flex, market_config, product_tuples
     )
     assert isinstance(pos_bids, list)
     # --- NEGATIVE CRM ---
-    neg_strategy = DSM_NegCRM_Strategy()
+    neg_strategy = DsmCapacityHeuristicBalancingStrategy()
     neg_bids = neg_strategy.calculate_bids(
         steam_plant_with_crm_flex, market_config, product_tuples
     )
@@ -592,15 +648,44 @@ def test_crm_block_flexibility_and_bidding(steam_plant_with_crm_flex):
 
 
 @pytest.fixture
-def steam_plant_with_price_signal_flex(steam_plant_components_with_hp_b):
+def steam_plant_components_with_hp_b_elec_boiler():
+    """Components fixture with electricity boiler, suitable for electricity_price_signal flexibility."""
+    return {
+        "heat_pump": {
+            "max_power": 30,
+            "cop": 2,
+            "min_power": 0,
+            "ramp_up": 30,
+            "ramp_down": 30,
+        },
+        "boiler": {
+            "max_power": 50,
+            "efficiency": 0.9,
+            "fuel_type": "electricity",
+            "min_power": 0,
+            "ramp_up": 50,
+            "ramp_down": 50,
+        },
+    }
+
+
+@pytest.fixture
+def steam_plant_with_price_signal_flex(steam_plant_components_with_hp_b_elec_boiler):
     index = pd.date_range("2023-01-01", periods=24, freq="h")
     # New price signal: simulate low prices at night, high in afternoon
     price_flex = [30] * 6 + [45] * 6 + [80] * 6 + [50] * 6
-    forecast = NaiveForecast(
+    forecast = SteamgenerationForecaster(
         index,
-        electricity_price=[60] * 24,  # Reference, will be replaced in flex mode
-        hydrogen_gas_price=[55] * 24,
-        A360_thermal_demand=[100] * 24,
+        demand=0,
+        electricity_price=[60] * 24,
+        electricity_price_flex=price_flex,
+        fuel_prices={},
+        thermal_demand=[100] * 24,
+        congestion_signal=0,
+        renewable_utilisation_signal=0,
+        thermal_storage_schedule=0,
+        availability=0,
+        market_prices={"EOM": 0},
     )
     bidding_strategy = {}
     plant = SteamPlant(
@@ -610,10 +695,10 @@ def steam_plant_with_price_signal_flex(steam_plant_components_with_hp_b):
         flexibility_measure="electricity_price_signal",
         cost_tolerance=5,
         bidding_strategies=bidding_strategy,
-        components=steam_plant_components_with_hp_b,
+        components=steam_plant_components_with_hp_b_elec_boiler,
         forecaster=forecast,
     )
-    plant.electricity_price_flex = price_flex
+    plant.setup_model()
     return plant
 
 

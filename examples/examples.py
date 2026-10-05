@@ -55,6 +55,10 @@ available_examples = {
         "scenario": "example_01d",
         "study_case": "zonal_case",
     },
+    "small_with_nodal_clearing": {
+        "scenario": "example_01d",
+        "study_case": "nodal_case",
+    },
     # example_01e is used in the tutorial notebook #3: Custom unit and bidding strategy example
     "market_study_eom": {
         "scenario": "example_01f",
@@ -102,6 +106,9 @@ available_examples = {
         "scenario": "example_03c",
         "study_case": "base_case_2019_with_storage",
     },
+# redispatch example
+    "redisp_3_nodes": {"scenario": "example_04a", "study_case": "base"},
+
     "large_2024_with_comando_DSM": {
         "scenario": "example_04",
         "study_case": "comando_case_2019_with_DSM",
@@ -171,7 +178,9 @@ if __name__ == "__main__":
     #     unit_type="custom_unit",
     # )
 
-    if world.learning_config.get("learning_mode", False):
+    if world.learning_mode:
         # run learning if learning mode is enabled
         run_learning(world)
     world.run()
+
+# %%

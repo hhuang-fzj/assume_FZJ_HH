@@ -24,14 +24,6 @@ assume.common.exceptions module
    :undoc-members:
    :show-inheritance:
 
-assume.common.forecasts module
-------------------------------
-
-.. automodule:: assume.common.forecasts
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 assume.common.mango\_serializer module
 --------------------------------------
 
@@ -68,6 +60,14 @@ assume.common.utils module
 --------------------------
 
 .. automodule:: assume.common.utils
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+assume.common.forecast\_algorithms module
+-----------------------------------------
+
+.. automodule:: assume.common.forecast_algorithms
    :members:
    :undoc-members:
    :show-inheritance:

@@ -14,8 +14,7 @@ import pandas as pd
 from dateutil import rrule as rr
 
 from assume import World
-from assume.common.fast_pandas import FastSeries, FastIndex
-from assume.common.forecasts import NaiveForecast
+from assume.common.forecaster import DemandForecaster, PowerplantForecaster
 from assume.common.market_objects import MarketConfig, MarketProduct
 from assume.scenario.oeds.infrastructure import InfrastructureInterface
 
@@ -33,7 +32,8 @@ def load_oeds(
     bidding_strategies: dict[str, str],
     nuts_config: list[str] = [],
     random=True,
-    entsoe_demand=True,
+    entsoe_demand=False,
+    use_offshore=False,
     component_exclusion_list : list[str] | None = None,
 ):
     """
@@ -101,29 +101,29 @@ def load_oeds(
                 fuel_prices[name].reindex(index, method="nearest").values
             )
 
-    offshore_wind = infra_interface.get_offshore_wind_series(start, end)
-    if offshore_wind.max() > 0:
-        world.add_unit_operator("renewables_offshore")
-        world.add_unit(
-            "renewables_off_wind",
-            "power_plant",
-            "renewables_offshore",
-            # the unit_params have no hints
-            {
-                "min_power": 0,
-                "max_power": offshore_wind.max(),
-                "bidding_strategies": bidding_strategies["wind"],
-                "technology": "wind_offshore",
-                "location": (8.18, 54.4),
-                "node": "DEF",
-            },
-            NaiveForecast(
-                index,
-                availability=offshore_wind / offshore_wind.max(),
-                fuel_price=0.2,
-                co2_price=0,
-            ),
-        )
+    if use_offshore:
+        offshore_wind = infra_interface.get_offshore_wind_series(start, end)
+        if offshore_wind.max() > 0:
+            world.add_unit_operator("renewables_offshore")
+            world.add_unit(
+                "renewables_off_wind",
+                "power_plant",
+                "renewables_offshore",
+                # the unit_params have no hints
+                {
+                    "min_power": 0,
+                    "max_power": offshore_wind.max(),
+                    "bidding_strategies": bidding_strategies["wind"],
+                    "technology": "wind_offshore",
+                    "location": (8.18, 54.4),
+                    "node": "DEF",
+                },
+                PowerplantForecaster(
+                    index,
+                    availability=offshore_wind / offshore_wind.max(),
+                    fuel_prices={"others": 0.2},
+                ),
+            )
 
     # total german demand if area is not set
     if entsoe_demand:
@@ -154,14 +154,7 @@ def load_oeds(
                     )
                 )
 
-
-            # demand in MW
-            if not entsoe_demand:
-                demand_save = demand_save.resample("h").mean()
-                demand = demand_save
-            else:
-                demand_save = demand.resample("h").mean()#fixme: why should we overwrite the demand_save by demand? is demand not already resampled?
-
+            # now store the area specific demand in CSV
             try:
                 config_path.mkdir(parents=True, exist_ok=True)
                 demand_save.to_csv(config_path / "demand.csv")
@@ -171,6 +164,12 @@ def load_oeds(
                 wind.to_csv(config_path / "wind.csv")
             except Exception:
                 shutil.rmtree(config_path, ignore_errors=True)
+
+            # demand in MW
+            if not entsoe_demand:
+                demand = demand_save
+            demand = demand.resample("h").mean()
+
         else:
             logger.info("use existing local time series")
             # demand from OEP is less accurate but extrapolates better
@@ -198,14 +197,17 @@ def load_oeds(
             # the unit_params have no hints
             {
                 "min_power": 0,
-                "max_power": demand.max(),
+                "max_power": -demand.max(),
                 "bidding_strategies": bidding_strategies["demand"],
                 "technology": "demand",
                 "location": (lat, lon),
                 "node": area,
                 "price": 1e3,
             },
-            NaiveForecast(index, demand=demand),
+            DemandForecaster(
+                index,
+                demand=-abs(demand),
+            ),
         )
 
         world.add_unit_operator(f"renewables{area}")
@@ -222,8 +224,10 @@ def load_oeds(
                 "location": (lat, lon),
                 "node": area,
             },
-            NaiveForecast(
-                index, availability=solar / solar.max(), fuel_price=0.1, co2_price=0
+            PowerplantForecaster(
+                index,
+                availability=solar / solar.max(),
+                fuel_prices={"others": 0.1},
             ),
         )
         if wind.max() > 0:
@@ -240,8 +244,10 @@ def load_oeds(
                     "location": (lat, lon),
                     "node": area,
                 },
-                NaiveForecast(
-                    index, availability=wind / wind.max(), fuel_price=0.2, co2_price=0
+                PowerplantForecaster(
+                    index,
+                    availability=wind / wind.max(),
+                    fuel_prices={"others": 0.2},
                 ),
             )
 
@@ -267,11 +273,10 @@ def load_oeds(
                 "location": (lat, lon),
                 "node": area,
             },
-            NaiveForecast(
+            PowerplantForecaster(
                 index,
                 availability=1,
-                fuel_price=fuel_prices["biomass"] + randomness,
-                co2_price=0,
+                fuel_prices={"others": fuel_prices["biomass"] + randomness},
             ),
         )
         water = infra_interface.get_run_river_systems_in_area(area=area)
@@ -291,7 +296,11 @@ def load_oeds(
                 "location": (lat, lon),
                 "node": area,
             },
-            NaiveForecast(index, availability=1, fuel_price=0.2, co2_price=0),
+            PowerplantForecaster(
+                index,
+                availability=1,
+                fuel_prices={"others": 0.2},
+            ),
         )
 
         if True:
@@ -306,8 +315,9 @@ def load_oeds(
                     {
                         "max_power_charge": storage["max_power_charge"] / 1e3,
                         "max_power_discharge": storage["max_power_discharge"] / 1e3,
-                        "max_soc": storage["max_soc"] / 1e3,
-                        "min_soc": storage["min_soc"] / 1e3,
+                        "capacity": storage["capacity"] / 1e3,
+                        "max_soc": storage["max_soc"],
+                        "min_soc": storage["min_soc"],
                         "efficiency_charge": storage["efficiency_charge"],
                         "efficiency_discharge": storage["efficiency_discharge"],
                         "bidding_strategies": bidding_strategies["storage"],
@@ -315,7 +325,9 @@ def load_oeds(
                         "location": (lat, lon),
                         "node": area,
                     },
-                    NaiveForecast(index, availability=1, fuel_price=0.2, co2_price=0),
+                    PowerplantForecaster(
+                        index, availability=1, fuel_prices={"others": 0.2}
+                    ),
                 )
 
         world.add_unit_operator(f"conventional{area}")
@@ -336,11 +348,8 @@ def load_oeds(
 
                 availability = 1
                 if plant["endDate"] < end:
-                    #Fixme: Temporal convert index and end here to fast_pandas so they can be processed here
-                    index = FastIndex(start=start, end=end)#Note: defualt time resolution 1h
-
-                    availability = FastSeries(index, 1)#Fixme: the origin version defines index as pd.DatetimeIndex at beginning of the function loader_oeds(), where should it be converted into FastIndex?
-                    #availability[availability.index > end] = 0#Fixme: Index is define from start to end, so why whould their be any datetime beyond end?
+                    availability = pd.Series(index=index, data=1)
+                    availability[availability.index > end] = 0
 
                 world.add_unit(
                     f"conventional{area}_{fuel_type}_{i}",
@@ -360,13 +369,17 @@ def load_oeds(
                         "location": (lat, lon),
                         "node": area,
                     },
-                    NaiveForecast(
+                    PowerplantForecaster(
                         index,
                         availability=availability,
-                        fuel_price=fuel_prices[fuel_type] + randomness,
-                        co2_price=fuel_prices["co2"],
+                        fuel_prices={
+                            "others": fuel_prices[fuel_type] + randomness,
+                            "co2": fuel_prices["co2"],
+                        },
                     ),
                 )
+
+    world.init_forecasts()
 
 
 if __name__ == "__main__":
@@ -387,13 +400,17 @@ if __name__ == "__main__":
     #nuts_config = "nuts3"
     nuts_config = "DEA26" #example for FZJ(Landkreis Dueren)
     year = 2024
-    random = True
+    random = False
+    entsoe = False
     type = "random" if random else "static"
     exclude_components = json.loads(os.getenv("EXCLUDE_COMPONENTS", "[]")) #list of str('EinheitMastrID_to_exclude')
     if isinstance(nuts_config, str):
         study_case = f"{nuts_config}_{type}_{year}"
         if exclude_components:
             study_case = f"{nuts_config}_{type}_{year}_SAO" # specify the simulation name for Smart Area Operation
+        #entsoe = True
+    elif len(nuts_config) == 1:
+        study_case = f"{nuts_config[0]}_{type}_{year}"
     else:
         study_case = f"custom_{type}_{year}"
     start = datetime(year, 1, 1)
@@ -411,8 +428,13 @@ if __name__ == "__main__":
         )
     ]
 
-    default_strategy = {mc.market_id: "naive_eom" for mc in marketdesign}
-    default_naive_strategy = {mc.market_id: "naive_eom" for mc in marketdesign}
+    default_strategy = {mc.market_id: "powerplant_energy_naive" for mc in marketdesign}
+    default_naive_strategy = {
+        mc.market_id: "powerplant_energy_naive" for mc in marketdesign
+    }
+    default_demand_strategy = {
+        mc.market_id: "demand_energy_naive" for mc in marketdesign
+    }
 
     bidding_strategies = {
         "hard coal": default_strategy,
@@ -424,8 +446,10 @@ if __name__ == "__main__":
         "nuclear": default_strategy,
         "wind": default_naive_strategy,
         "solar": default_naive_strategy,
-        "demand": default_naive_strategy,
-        "storage": {mc.market_id: "flexable_eom_storage" for mc in marketdesign},
+        "demand": default_demand_strategy,
+        "storage": {
+            mc.market_id: "storage_energy_heuristic_flexable" for mc in marketdesign
+        },
     }
     load_oeds(
         world,
@@ -438,7 +462,8 @@ if __name__ == "__main__":
         bidding_strategies,
         nuts_config,
         entsoe_demand=False,
-        component_exclusion_list = exclude_components
+        component_exclusion_list = exclude_components,
+        use_offshore=entsoe,
     )
 
     world.run()

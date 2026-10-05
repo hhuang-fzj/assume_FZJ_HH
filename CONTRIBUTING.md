@@ -59,7 +59,7 @@ pre-commit run --all-files
 4. Install also testing capabilities:
 
 ```bash
-pip install -e ".[testing]"
+pip install -e ".[test]"
 ```
 
 5. Implement your changes and push the changes to a fork
@@ -68,26 +68,34 @@ pip install -e ".[testing]"
 
 ### Creating a new release
 
-To release a new version, increase the version in `pyproject.toml` and create a git tag of the release commit and release notes in GitHub.
-To push to PyPi run:
-
-```
-rm -r dist
-python -m build .
-twine upload --repository pypi dist/*
-```
-
-See also: https://twine.readthedocs.io/en/stable/index.html#using-twine
-
-The upload to PyPi has to be confirmed by one of the core developers.
+To release a new version, create a git tag of the release commit and release notes in GitHub (also possible via `Draft new release` function of GitHub). No adjusted toml file necessary anymore.
+A GitHub Action automatically uploads the release to PyPI.
+The upload to PyPI has to be confirmed by one of the core developers.
 
 ## Building documentation
 
 First, create an environment that includes the documentation dependencies:
 
+
+### Conda
+
+Conda installs the required dependencies and pandoc as well:
+
 ```bash
 conda env create -f environment_docs.yaml
 ```
+
+### Venv
+
+To use a venv without conda, a system installation of pandoc is required: https://pandoc.org/installing.html
+
+You then need to install the dependencies into your venv using:
+
+```bash
+pip install -e .[docs]
+```
+
+### Building Docs
 
 To generate or update the automatically created docs in `docs/source/assume*`, run:
 
@@ -98,11 +106,11 @@ sphinx-apidoc -o docs/source -Fa assume
 To create and serve the documentation locally, use:
 
 ```bash
-cd docs/source && python -m sphinx . ../build && cd ../.. && python -m http.server --directory docs/build
+python -m sphinx docs/source docs/build && python -m http.server --directory docs/build
 ```
 
 ## Need some help?
 
 Reach out to us with your questions:
 
-kim.miskiw@kit.edu / manish.khanra@isi.fraunhofer.de / maurer@fh-aachen.de / nick.harder@inatech.uni-freiburg.de
+kim.miskiw@kit.edu / manish.khanra@isi.fraunhofer.de / maurer@fh-aachen.de / gunter.grimm@inatech.uni-freiburg.de

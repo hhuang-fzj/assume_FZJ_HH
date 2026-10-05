@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 
-from assume.common.base import BaseStrategy, SupportsMinMax
+from assume.common.base import MinMaxStrategy, SupportsMinMax
 from assume.common.market_objects import MarketConfig, Order, Orderbook, Product
 
 
-class NaiveSingleBidStrategy(BaseStrategy):
+class EnergyNaiveStrategy(MinMaxStrategy):
     """
     A naive strategy that bids the marginal cost of the unit on the market.
 
@@ -87,7 +87,7 @@ class NaiveSingleBidStrategy(BaseStrategy):
             return self.remove_empty_bids(bids)
 
 
-class NaiveProfileStrategy(BaseStrategy):
+class EnergyNaiveProfileStrategy(MinMaxStrategy):
     """
     A naive strategy that bids the marginal cost of the unit as block bids over 24 hours on the day ahead market.
     """
@@ -143,10 +143,13 @@ class NaiveProfileStrategy(BaseStrategy):
         return bids
 
 
-class NaiveDADSMStrategy(BaseStrategy):
+class DsmEnergyOptimizationStrategy(MinMaxStrategy):
     """
     A naive strategy of a Demand Side Management (DSM) unit. The bid volume is the optimal power requirement of
     the unit at the start time of the product. The bid price is the marginal cost of the unit at the start time of the product.
+
+    For rolling-horizon configured units, this strategy triggers re-optimization at each market clearing round,
+    ensuring the unit optimizes for the next window using updated state and remaining demand.
     """
 
     def calculate_bids(
@@ -169,9 +172,19 @@ class NaiveDADSMStrategy(BaseStrategy):
             Orderbook: The bids consisting of the start time, end time, only hours, price and volume.
         """
 
-        # check if unit has opt_power_requirement attribute
-        #ToDo: Do we really need an optimization to check that?
-        if unit.optimisation_counter == 0:
+        if unit.horizon_mode == "rolling_horizon":
+            current_market_time = product_tuples[0][0]
+            # Hook to refresh runtime forecasts before re-optimising the next window.
+            # Currently the configured update algorithms default to no-ops; the hook is
+            # kept so price/forecast learning can be plugged in without touching strategies.
+            unit.forecaster.update(unit=unit)
+            did_reoptimize = unit._check_and_reoptimize_rolling_window(
+                current_market_time
+            )
+            if not did_reoptimize and unit.optimisation_counter == 0:
+                unit.determine_optimal_operation_with_flex()
+                unit.optimisation_counter = 1
+        elif unit.optimisation_counter == 0:
             unit.determine_optimal_operation_with_flex()
             unit.optimisation_counter = 1
 
@@ -202,10 +215,12 @@ class NaiveDADSMStrategy(BaseStrategy):
         return bids
 
 
-class NaiveRedispatchDSMStrategy(BaseStrategy):
+class DsmEnergyNaiveRedispatchStrategy(MinMaxStrategy):
     """
     A naive strategy of a Demand Side Management (DSM) unit that bids the available flexibility of the unit on the redispatch market.
     The bid volume is the flexible power requirement of the unit at the start time of the product. The bid price is the marginal cost of the unit at the start time of the product.
+
+    For rolling-horizon configured units, this strategy triggers re-optimization at each market clearing round.
     """
 
     def calculate_bids(
@@ -215,6 +230,14 @@ class NaiveRedispatchDSMStrategy(BaseStrategy):
         product_tuples: list[Product],
         **kwargs,
     ) -> Orderbook:
+        if unit.horizon_mode == "rolling_horizon":
+            current_market_time = product_tuples[0][0]
+            # Hook to refresh runtime forecasts before re-optimising the next window.
+            # Currently the configured update algorithms default to no-ops; the hook is
+            # kept so price/forecast learning can be plugged in without touching strategies.
+            unit.forecaster.update(unit=unit)
+            unit._check_and_reoptimize_rolling_window(current_market_time)
+
         # calculate the optimal operation of the unit according to the objective function
         unit.determine_optimal_operation_with_flex()
 
@@ -240,7 +263,7 @@ class NaiveRedispatchDSMStrategy(BaseStrategy):
         return bids
 
 
-class NaiveRedispatchStrategy(BaseStrategy):
+class EnergyNaiveRedispatchStrategy(MinMaxStrategy):
     """
     A naive strategy that simply submits all information about the unit and
     currently dispatched power for the following hours to the redispatch market.
@@ -272,9 +295,8 @@ class NaiveRedispatchStrategy(BaseStrategy):
         :rtype: Orderbook
         """
         start = product_tuples[0][0]
-        # end_all = product_tuples[-1][1]
         previous_power = unit.get_output_before(start)
-        min_power, max_power = unit.min_power, unit.max_power
+        p_nom = unit.max_power
 
         bids = []
         for product in product_tuples:
@@ -283,6 +305,15 @@ class NaiveRedispatchStrategy(BaseStrategy):
             marginal_cost = unit.calculate_marginal_cost(
                 start, previous_power
             )  # calculation of the marginal costs
+            available_power = unit.forecaster.availability.at[start] * unit.max_power
+            # if additional max_power is below the technical minimum, the unit cannot run
+            # set to current power to avoid supplying redispatch potential (although current power should generally be 0 in that case)
+            if available_power < unit.min_power:
+                min_power = current_power
+                max_power = current_power
+            else:
+                min_power = unit.min_power
+                max_power = available_power
 
             bids.append(
                 {
@@ -293,14 +324,18 @@ class NaiveRedispatchStrategy(BaseStrategy):
                     "volume": current_power,
                     "max_power": max_power,
                     "min_power": min_power,
+                    "p_nom": p_nom,
                     "node": unit.node,
                 }
             )
 
+            # update previous power for the next iteration
+            previous_power = current_power
+
         return bids
 
 
-class NaiveExchangeStrategy(BaseStrategy):
+class ExchangeEnergyNaiveStrategy(MinMaxStrategy):
     """
     A naive strategy for an exchange unit that bids the defined import and export prices on the market.
     It submits two bids, one for import and one for export, with the respective prices and volumes.
@@ -367,7 +402,7 @@ class NaiveExchangeStrategy(BaseStrategy):
         return bids
 
 
-class ElasticDemandStrategy(BaseStrategy):
+class EnergyHeuristicElasticStrategy(MinMaxStrategy):
     """
     A bidding strategy for a demand unit that submits multiple bids to approximate
     a marginal utility curve, based on linear or isoelastic demand theory.
@@ -522,9 +557,9 @@ class ElasticDemandStrategy(BaseStrategy):
         return volume
 
 
-class DSM_PosCRM_Strategy(BaseStrategy):
+class DsmCapacityHeuristicBalancingStrategy(MinMaxStrategy):
     """
-    Strategy for Positive CRM Reserve (Demand Side, i.e., up & down, symmetric).
+    Strategy for Positive/Negative CRM Reserve (Demand Side, i.e., up & down, symmetric).
     """
 
     def calculate_bids(self, unit, market_config, product_tuples, **kwargs):
@@ -554,45 +589,6 @@ class DSM_PosCRM_Strategy(BaseStrategy):
                         "price": 0,  # or unit.calculate_marginal_cost(...)
                         "volume": symmetric_capacity,
                         "unit_id": unit.id,
-                        "market_id": "CRM_pos",
-                    }
-                )
-        return self.remove_empty_bids(bids)
-
-
-class DSM_NegCRM_Strategy(BaseStrategy):
-    """
-    Strategy for Negative CRM Reserve (Demand Side, i.e., up & down, symmetric).
-    """
-
-    def calculate_bids(self, unit, market_config, product_tuples, **kwargs):
-        # IDENTICAL LOGIC as POS, since symmetric in Germany (volume is symmetric)
-        # If you ever want to do *only* neg or pos (asymmetric), just change which cap you use!
-        bids = []
-        max_power = unit.max_plant_capacity
-        min_power = unit.min_plant_capacity
-
-        for product in product_tuples:
-            start, end, only_hours = product
-            block_times = [dt for dt in unit.index.get_date_list() if start <= dt < end]
-
-            up_caps = []
-            down_caps = []
-            for t in block_times:
-                flex = unit.flex_power_requirement.at[t]
-                up_caps.append(max_power - flex)
-                down_caps.append(flex - min_power)
-            symmetric_capacity = min(min(up_caps), min(down_caps))
-            if symmetric_capacity > 0:
-                bids.append(
-                    {
-                        "start_time": start,
-                        "end_time": end,
-                        "only_hours": only_hours,
-                        "price": 0,
-                        "volume": symmetric_capacity,
-                        "unit_id": unit.id,
-                        "market_id": "CRM_neg",
                     }
                 )
         return self.remove_empty_bids(bids)

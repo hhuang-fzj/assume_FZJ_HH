@@ -150,6 +150,8 @@ examples/inputs/*
 **/scenario/*.csv
 *.pb
 *.jar
+*.nbconvert.ipynb
 fameSetup.yaml
+.claude
 
 assume/units/comando_components.py

@@ -66,15 +66,15 @@ def extend_orderbook(
 
     if bid_type == "BB" or bid_type == "LB":
         if volume < 0:
-            agent_addr = f"block_dem{len(orderbook)+1}"
+            agent_addr = f"block_dem{len(orderbook) + 1}"
         else:
-            agent_addr = f"block_gen{len(orderbook)+1}"
+            agent_addr = f"block_gen{len(orderbook) + 1}"
 
         order: Order = {
             "start_time": products[0][0],
             "end_time": products[-1][1],
             "agent_addr": agent_addr,
-            "bid_id": f"bid_{len(orderbook)+1}",
+            "bid_id": f"bid_{len(orderbook) + 1}",
             "volume": {product[0]: volume for product in products},
             "price": price,
             "only_hours": None,
@@ -94,16 +94,16 @@ def extend_orderbook(
 
     else:
         if volume < 0:
-            agent_addr = f"dem{len(orderbook)+1}"
+            agent_addr = f"dem{len(orderbook) + 1}"
         else:
-            agent_addr = f"gen{len(orderbook)+1}"
+            agent_addr = f"gen{len(orderbook) + 1}"
 
         for product in products:
             order: Order = {
                 "start_time": product[0],
                 "end_time": product[1],
                 "agent_addr": agent_addr,
-                "bid_id": f"bid_{len(orderbook)+1}",
+                "bid_id": f"bid_{len(orderbook) + 1}",
                 "volume": volume,
                 "accepted_volume": 0,
                 "price": price,
@@ -148,7 +148,7 @@ def get_test_prices(num: int = 24):
 
 
 start, end = datetime(2022, 1, 1), datetime(2022, 1, 31)
-index = pd.date_range(start=start, end=end, freq="d")
+index = pd.date_range(start=start, end=end, freq="D")
 
 
 def setup_simple_world() -> World:

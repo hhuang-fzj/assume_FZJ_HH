@@ -10,7 +10,7 @@ import pytest
 
 from assume.common.base import SupportsMinMax
 from assume.common.fast_pandas import FastSeries
-from assume.common.forecasts import NaiveForecast
+from assume.common.forecaster import DemandForecaster
 
 
 class MockMarketConfig:
@@ -22,8 +22,15 @@ class MockMarketConfig:
 
 
 class MockMinMaxUnit(SupportsMinMax):
-    def __init__(self, forecaster, **kwargs):
-        super().__init__("", "", "", {}, forecaster, None, **kwargs)
+    def __init__(self, forecaster):
+        super().__init__(
+            id="",
+            unit_operator="",
+            technology="",
+            bidding_strategies={},
+            forecaster=forecaster,
+            location=None,
+        )
         self.max_power = 1000
         self.min_power = 0
         self.ramp_down = 200
@@ -50,5 +57,5 @@ def mock_supports_minmax():
     index = pd.date_range(
         start=datetime(2023, 7, 1), end=datetime(2023, 7, 2), freq="1h"
     )
-    forecaster = NaiveForecast(index, demand=150)
+    forecaster = DemandForecaster(index, demand=-150)
     return MockMinMaxUnit(forecaster=forecaster)

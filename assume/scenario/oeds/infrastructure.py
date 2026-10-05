@@ -47,10 +47,9 @@ class InfrastructureInterface:
         db_server_uri,
         structure_databases=(
             "mastr",
-            "oep",#fixme: No crawler
-            "windmodel",#fixme:Currently not used
+            "oep",
             "nuts",
-            "scigrid",#fixme: Currently not used
+            "scigrid",
             "weather",
             "opec",
             "instrat_pl",
@@ -183,6 +182,8 @@ class InfrastructureInterface:
         if not area.startswith("DE"):
             return self.get_lat_lon(area)
         plz_codes = self.get_plz_codes(area)
+        if not plz_codes:
+            raise ValueError(f"invalid area selected: {area}")
         lat_lons = [self.get_lat_lon(plz) for plz in plz_codes]
         lat, lon = np.array(lat_lons).mean(axis=0)
         return lat, lon
@@ -848,7 +849,6 @@ class InfrastructureInterface:
         df["VMax"] = df["VMax"].fillna(10)
         df["ownConsumption"] = df["ownConsumption"].replace(689, 1)
         df["ownConsumption"] = df["ownConsumption"].replace(688, 0)
-        #Fixme: Why is
         df["limited"] = [
             mastr_solar_azimuth[str(code)] for code in df["limited"]#Fixme: String Value from Mastr
         ]

@@ -5,13 +5,17 @@
 import calendar
 import inspect
 import logging
+import os
+import random
 import re
+import shutil
 import sys
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from itertools import groupby
 from operator import itemgetter
+from pathlib import Path
 
 import dateutil.rrule as rr
 import numpy as np
@@ -20,6 +24,8 @@ import yaml
 from pyomo.opt import check_available_solvers
 
 from assume.common.base import BaseStrategy, LearningStrategy
+from assume.common.exceptions import AssumeException
+from assume.common.fast_pandas import FastSeries
 from assume.common.market_objects import MarketProduct, Orderbook
 
 logger = logging.getLogger(__name__)
@@ -34,6 +40,12 @@ freq_map = {
     "w": rr.WEEKLY,
     "week": rr.WEEKLY,
 }
+
+# Solver priority order for fallback selection.
+SUPPORTED_SOLVERS = [ "gurobi","highs", "glpk", "cbc", "cplex"]
+
+# Backend-specific aliases for solver names.
+PYOMO_SOLVER_ALIASES = {"highs": "appsi_highs"}
 
 
 def initializer(func):
@@ -347,7 +359,7 @@ def separate_orders(orderbook: Orderbook):
     Returns:
         list: The updated orderbook.
 
-    Notes:
+    Note:
         This function separates orders with several hours into single hour orders and modifies the orderbook in place.
     """
 
@@ -607,27 +619,103 @@ def convert_tensors(data):
     try:
         import torch as th
 
-        if isinstance(data, pd.Series):
-            # Vectorized conversion
-            return data.map(lambda x: x.tolist() if isinstance(x, th.Tensor) else x)
+        def convert_tensor_batch(tensors):
+            # stack all tensors and push them over to CPU together to avoid unperformed multiple GPU-CPU transfers
+            batch = th.stack(tensors, dim=0).cpu()
+            return batch.tolist()
 
-        elif isinstance(data, dict):
-            # Recursively convert tensors in a dictionary
-            return {k: convert_tensors(v) for k, v in data.items()}
+        def collect_tensors_with_paths(data, path=None, collected=None):
+            """
+            Recursively collect all torch.Tensors from nested data structures,
+            storing both the tensor and its location path.
+            Returns a copy of the structure with placeholders for tensors.
+            """
+            if collected is None:
+                collected = []
+            if path is None:
+                path = []
 
-        elif isinstance(data, list):
-            # Recursively convert tensors in a list
-            return [convert_tensors(item) for item in data]
+            if isinstance(data, pd.Series):
+                new_series = pd.Series(index=data.index, name=data.name, dtype=object)
+                for idx, x in data.items():
+                    new_val, collected = collect_tensors_with_paths(
+                        x, path + [idx], collected
+                    )
+                    new_series[idx] = new_val
+                return new_series, collected
 
-        elif isinstance(data, th.Tensor):
-            # Handles both scalars and multi-dimensional tensors
-            return data.tolist()  # Converts to Python-native lists/ints/floats
+            elif isinstance(data, dict):
+                new_dict = {}
+                for k, v in data.items():
+                    new_dict[k], collected = collect_tensors_with_paths(
+                        v, path + [k], collected
+                    )
+                return new_dict, collected
+
+            elif isinstance(data, list):
+                new_list = []
+                for i, item in enumerate(data):
+                    new_item, collected = collect_tensors_with_paths(
+                        item, path + [i], collected
+                    )
+                    new_list.append(new_item)
+                return new_list, collected
+
+            elif isinstance(data, th.Tensor):
+                # Store the path and tensor
+                collected.append((path, data))
+                # Return a placeholder (will be replaced later)
+                return None, collected
+
+            else:
+                # Non-tensor data, return as-is
+                return data, collected
+
+        def reconstruct_data(structure, tensor_paths, new_values):
+            """
+            Inserts the converted tensors (new_values) back into the structure
+            at the positions described by tensor_paths.
+            """
+            for path, val in zip(tensor_paths, new_values):
+                if not path:  # Empty path means the root is a tensor
+                    return val
+
+                target = structure
+                # Navigate to the parent of the target location
+                for p in path[:-1]:
+                    target = target[p]
+
+                # Set the final value
+                final_key = path[-1]
+                if isinstance(target, (list | pd.Series | dict)):
+                    target[final_key] = val
+
+            return structure
+
+        # Handle the case where data itself is a tensor
+        if isinstance(data, th.Tensor):
+            return data.cpu().tolist()
+
+        # 1. Collect tensors with their paths
+        structure, tensor_info = collect_tensors_with_paths(data)
+
+        if not tensor_info:
+            # No tensors found, return original data
+            return data
+
+        tensor_paths, tensors = zip(*tensor_info)
+
+        # 2. Process batch from GPU to CPU and convert to list
+        converted = convert_tensor_batch(list(tensors))
+
+        # 3. Reconstruct initial data structure
+        final_data = reconstruct_data(structure, tensor_paths, converted)
+
+        return final_data
 
     except ImportError:
         # If torch is not installed, return the data unchanged
-        pass
-
-    return data
+        return data
 
 
 # Function to parse the duration string
@@ -663,19 +751,37 @@ def calculate_content_size(content: list | dict) -> int:
     return sys.getsizeof(content)
 
 
-def min_max_scale(x, min_val: float, max_val: float):
+def min_max_scale(
+    val: np.ndarray | float,  # or th.Tensor
+    in_min: float,
+    in_max: float,
+    out_min: float = 0.0,
+    out_max: float = 1.0,
+) -> np.ndarray | float:  # or th.Tensor
     """
-    Min-Max scaling of a value x to the range [0, 1]
+    Linearly scale value from [in_min, in_max] to [out_min, out_max] (default: [0.0, 1.0]).
 
     Args:
-        x: value(s) to scale
-        min_val: minimum value of the parameter
-        max_val: maximum value of the parameter
+        val: value(s) to scale
+        in_min: minimum value of the input range
+        in_max: maximum value of the input range
+        out_min: minimum value of the output range
+        out_max: maximum value of the output range
     """
+    # Catch values outside the input range
+    if np.any(val < in_min) or np.any(val > in_max):
+        raise ValueError(
+            f"Value {val} is outside the input range [{in_min}, {in_max}]."
+        )
+    out_mean = (out_min + out_max) / 2
     # Avoid division by zero
-    if min_val == max_val:
-        return x
-    return (x - min_val) / (max_val - min_val)
+    if in_min == in_max:
+        if isinstance(val, FastSeries):
+            return val.ones_like() * out_mean
+        else:
+            return np.ones_like(val) * out_mean
+    else:
+        return out_min + (val - in_min) / (in_max - in_min) * (out_max - out_min)
 
 
 def str_to_bool(val):
@@ -694,16 +800,38 @@ def str_to_bool(val):
         raise ValueError(f"Invalid truth value: {val!r}")
 
 
-def get_supported_solver(default_solver: str | None = None):
-    SOLVERS = ["gurobi", "appsi_highs", "glpk", "cbc", "cplex"]
+def get_supported_solver_pyomo(default_solver: str | None = None):
+    """
+    Get an available solver for Pyomo optimization.
+
+    Filters the list of supported solvers to find which ones are installed,
+    then returns the default solver if available, otherwise falls back to the first available solver.
+    Note: 'highs' is automatically converted to 'appsi_highs' for Pyomo compatibility.
+
+    Args:
+        default_solver (str | None, optional): Preferred solver name. If not available,
+            falls back to the first available solver. Defaults to None.
+
+    Returns:
+        str: Name of the selected solver.
+
+    Raises:
+        RuntimeError: If none of the supported solvers (appsi_highs, gurobi, glpk, cbc, cplex) are available.
+
+    Warning:
+        Logs a warning if the default_solver is not available and a fallback is used.
+    """
+
+    pyomo_solvers = [
+        PYOMO_SOLVER_ALIASES.get(solver, solver) for solver in SUPPORTED_SOLVERS
+    ]
 
     # Check if the solver is available
-    solvers = check_available_solvers(*SOLVERS)
+    solvers = check_available_solvers(*pyomo_solvers)
     if not solvers:
-        raise RuntimeError(f"None of {SOLVERS} are available")
+        raise RuntimeError(f"None of {pyomo_solvers} are available")
 
-    if default_solver == "highs":
-        default_solver = "appsi_highs"
+    default_solver = PYOMO_SOLVER_ALIASES.get(default_solver, default_solver)
 
     solver = default_solver or solvers[0]
 
@@ -712,6 +840,145 @@ def get_supported_solver(default_solver: str | None = None):
         solver = solvers[0]
 
     return solver
+
+
+def interactive_input(prompt: str, default: str = "") -> str:
+    if os.getenv("NON_INTERACTIVE"):
+        return default
+    else:
+        return input(prompt)
+
+
+def confirm_learning_save_path(save_path: str, continue_learning: bool) -> None:
+    """
+    Check save_path and ask user how to proceed if it exists.
+    Raises AssumeException if user declines to proceed.
+    """
+    if not Path(save_path).is_dir():
+        return
+
+    if continue_learning:
+        logger.warning(
+            f"Save path '{save_path}' exists.\n"
+            "You are in continue learning mode. New strategies may overwrite previous ones.\n"
+            "It is recommended to use a different save path to avoid unintended overwrites.\n"
+            "You can set 'trained_policies_save_path' in the config."
+        )
+        proceed = interactive_input(
+            "Do you still want to proceed with the existing save path? (y/N) ",
+            default="y",
+        )
+        if not proceed.lower().startswith("y"):
+            raise AssumeException(
+                "Simulation aborted by user to avoid overwriting previous learned strategies. "
+                "Consider setting a new 'simulation_id' or 'trained_policies_save_path' in the config."
+            )
+    else:
+        logger.warning(
+            f"Save path '{save_path}' exists. Previous training data will be deleted to start fresh."
+        )
+        accept = interactive_input(
+            "Do you want to overwrite and start fresh? (y/N) ", default="y"
+        )
+
+        if accept.lower().startswith("y"):
+            shutil.rmtree(save_path, ignore_errors=True)
+            logger.info(
+                f"Previous strategies at '{save_path}' deleted. Starting fresh training."
+            )
+        else:
+            raise AssumeException(
+                "Simulation aborted by user not to overwrite existing learned strategies. "
+                "You can set a different 'simulation_id' or 'trained_policies_save_path' in the config."
+            )
+
+
+def set_random_seed(
+    seed: int | None,
+    torch_deterministic: bool = True,
+    learning_mode: bool = False,
+):
+    """
+    Args:
+        seed (int | None): Integer seed for random number generators or None to disable seeding.
+        torch_deterministic (bool): If True, enforces PyTorch deterministic algorithms. May reduce performance. Default is True.
+        learning_mode (bool): If True, PyTorch seeding is enabled. Default is False and PyTorch seeding is skipped.
+
+    Notes:
+         - Completely reproducible results are not guaranteed across different PyTorch versions, hardware, or CUDA configurations.
+         - See https://docs.pytorch.org/docs/stable/notes/randomness.html
+    """
+    if seed is None:
+        return
+
+    random.seed(seed)
+    np.random.seed(seed)
+
+    if not learning_mode:
+        return
+
+    try:
+        import torch as th
+
+        th.manual_seed(seed)
+
+        if torch_deterministic:
+            if "CUBLAS_WORKSPACE_CONFIG" not in os.environ:
+                os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
+            th.backends.cudnn.deterministic = True
+            th.backends.cudnn.benchmark = False
+
+            th.use_deterministic_algorithms(True)
+
+            logger.warning(
+                "PyTorch set to use deterministic algorithms. This may impact performance but ensures reproducibility. For better performance, consider setting 'deterministic' to False when set_random_seed() is called."
+            )
+    except ImportError:
+        pass
+
+
+def load_index_file(file_name: Path, index: pd.DatetimeIndex):
+    if not file_name.is_file():
+        return None
+    df = pd.read_csv(
+        file_name,
+        index_col=0,
+        encoding="utf-8",
+        na_values=["n.a.", "None", "-", "none", "nan"],
+        parse_dates=True,
+    )
+
+    if len(df.index) == 1:
+        return df
+
+    if len(df.index) != len(index) and not isinstance(df.index, pd.DatetimeIndex):
+        logger.warning(
+            f"{file_name}: simulation time line does not match length of dataframe and index is not a datetimeindex. Returning None."
+        )
+        return None
+
+    df.index.freq = df.index.inferred_freq
+
+    if len(df.index) < len(index) and df.index.freq == index.freq:
+        logger.warning(
+            f"{file_name}: simulation time line is longer than length of the dataframe. Returning None."
+        )
+        return None
+
+    if df.index.freq < index.freq:
+        logger.warning(
+            f"Resolution of {file_name} ({df.index.freq}) is higher than the simulation ({index.freq}). "
+            "Resampling using mean(). Make sure this is what you want."
+        )
+        df = df.resample(index.freq).mean()
+        logger.info(f"Downsampling {file_name} successful.")
+
+    elif df.index.freq > index.freq or len(df.index) < len(index):
+        logger.warning("Upsampling not implemented yet. Returning None.")
+        return None
+
+    return df.loc[index]
 
 #Function for comando integration
 def create_pwlm(base_eff=1, fit_params_nom=None, fit_params_den=None, pwlm_breakpoints=4, min_part_load=0,

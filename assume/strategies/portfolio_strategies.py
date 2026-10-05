@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 from assume.common.market_objects import MarketConfig, Orderbook, Product
-from assume.strategies.naive_strategies import NaiveSingleBidStrategy
+from assume.strategies.naive_strategies import EnergyNaiveStrategy
 
 
 class UnitOperatorStrategy:
@@ -41,29 +41,36 @@ class UnitOperatorStrategy:
     def total_capacity(
         self,
         units_operator,  # type: UnitsOperator
-    ) -> dict[str, dict[str, float]]:
+    ) -> dict[str, float]:
         """
-        Computes the total capacity of the units owned by a unit operator by market and technology.
+        Computes the total capacity of the units owned by a unit operator by market.
 
         Args:
             units_operator (UnitsOperator): The operator that bids on the market(s).
         Returns:
-            dict: a nested dictionary indexed by market and by technology.
+            dict: a nested dictionary indexed by market.
         """
 
         total_capacity = {}
 
         for unit in units_operator.units.values():#todo: have a look into total_capacity
             for market_id in unit.bidding_strategies.keys():
-                total_capacity[market_id] = total_capacity.get(market_id, {})
-                total_capacity[market_id][unit.technology] = (
-                    total_capacity[market_id].get(unit.technology, 0) + unit.max_power
+                total_capacity[market_id] = (
+                    total_capacity.get(market_id, 0) + unit.max_power
                 )
 
         return total_capacity
 
+    def calculate_reward(
+        self,
+        units_operator,  # type: UnitsOperator
+        marketconfig: MarketConfig,
+        orderbook: Orderbook,
+    ):
+        pass
 
-class DirectUnitOperatorStrategy(UnitOperatorStrategy):
+
+class UnitsOperatorDirectStrategy(UnitOperatorStrategy):
     def calculate_bids(
         self,
         units_operator,  # type: UnitsOperator
@@ -97,17 +104,17 @@ class DirectUnitOperatorStrategy(UnitOperatorStrategy):
                 if market_config.price_tick:
                     order["price"] = round(order["price"] / market_config.price_tick)
                 if "bid_id" not in order.keys() or order["bid_id"] is None:
-                    order["bid_id"] = f"{unit_id}_{i+1}"
+                    order["bid_id"] = f"{unit_id}_{i + 1}"
                 order["unit_id"] = unit_id
                 bids.append(order)
 
         return bids
 
 
-class CournotPortfolioStrategy(UnitOperatorStrategy):
+class UnitsOperatorEnergyHeuristicCournotStrategy(UnitOperatorStrategy):
     """
     A Cournot strategy that adds a markup to the marginal cost of each unit of
-    the units operator. The marginal cost is computed with NaiveSingleBidStrategy,
+    the units operator. The marginal cost is computed with EnergyNaiveStrategy,
     and the markup depends on the total capacity of the unit operator.
     """
 
@@ -146,7 +153,7 @@ class CournotPortfolioStrategy(UnitOperatorStrategy):
 
         for unit_id, unit in units_operator.units.items():
             # Compute bids from marginal costs of a unit
-            bids = NaiveSingleBidStrategy().calculate_bids(
+            bids = EnergyNaiveStrategy().calculate_bids(
                 unit,
                 market_config,
                 product_tuples,

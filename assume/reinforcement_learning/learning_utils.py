@@ -188,6 +188,56 @@ def copy_layer_data(dst, src):
             dst[k].data.copy_(src[k].data)
 
 
+def transform_buffer_data(
+    nested_dict: dict, device: th.device, keys_unit_order: list
+) -> np.ndarray:
+    """
+    Transform nested dict {datetime -> {unit_id -> [values]}} into
+    torch tensor of shape (timesteps, powerplants, values). Compatible with buffer storage.
+    Get tensors from GPU to CPU.
+
+    Args:
+        nested_dict: Dict with structure {datetime -> {unit_id -> list[tensor]}}
+
+    Returns:
+        th.Tensor: Shape (n_timesteps, n_powerplants, feature_dim)
+    """
+    # Get sorted lists of units and timestamps (for consistent ordering)
+    all_times = sorted(nested_dict.keys())
+
+    # Get feature dimension from first non-empty value
+    feature_dim = None
+    for unit_data in nested_dict.values():
+        for values in unit_data.values():
+            if values:
+                val = values[0]
+                feature_dim = (
+                    1 if isinstance(val, (int | float)) or val.ndim == 0 else len(val)
+                )
+                break
+        if feature_dim is not None:
+            break
+
+    if feature_dim is None:
+        raise ValueError(
+            "Error, while transforming RL data for buffer: No data found to determine feature dimension"
+        )
+
+    # Pre-allocate tensor (keep on same device as input data)
+    result = th.zeros(
+        (len(all_times), len(keys_unit_order), feature_dim), device=device
+    )
+
+    # Fill tensor with values (stays on same device as input so if on GPU it stays there during filling)
+    for t, timestamp in enumerate(all_times):
+        for u, unit_id in enumerate(keys_unit_order):
+            values = nested_dict[timestamp].get(unit_id, [])
+            if values:  # if we have values for this timestamp
+                result[t, u] = values[0]
+
+    return result.cpu().numpy()
+
+
 def transfer_weights(
     model: th.nn.Module,
     loaded_state: dict,
@@ -286,3 +336,49 @@ def transfer_weights(
             )
 
     return new_state_copy
+
+
+def encode_hourly_features(date: datetime) -> list:
+    """
+    Encode time features for a given datetime object.
+    This function extracts the hour as features from the datetime object
+    and encodes them using sine and cosine transformations to capture periodicity.
+
+    Args:
+        start (datetime): The datetime object to encode.
+
+    Returns:
+        list: A list containing the encoded time features.
+    """
+
+    hour = date.hour / 24.0
+    hour_cos = np.cos(2 * np.pi * hour)
+    hour_sin = np.sin(2 * np.pi * hour)
+
+    return [
+        hour_cos,
+        hour_sin,
+    ]
+
+
+def encode_monthly_features(start: datetime) -> list:
+    """
+    Encode time features for a given datetime object.
+    This function extracts the months from the datetime object
+    and encodes them using sine and cosine transformations to capture periodicity.
+
+    Args:
+        start (datetime): The datetime object to encode.
+
+    Returns:
+        list: A list containing the encoded time features.
+    """
+
+    month = start.month / 12.0
+    month_cos = np.cos(2 * np.pi * month)
+    month_sin = np.sin(2 * np.pi * month)
+
+    return [
+        month_cos,
+        month_sin,
+    ]

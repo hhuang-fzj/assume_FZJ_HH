@@ -8,25 +8,24 @@ from datetime import datetime, timedelta
 import pandas as pd
 import pytest
 
-from assume.common.forecasts import NaiveForecast
-from assume.strategies.flexable_storage import flexableEOMStorage
-from assume.strategies.naive_strategies import NaiveSingleBidStrategy
+from assume.common.forecaster import UnitForecaster
+from assume.strategies.flexable_storage import StorageEnergyHeuristicFlexableStrategy
 from assume.units import Storage
 
 
 @pytest.fixture
 def storage_unit() -> Storage:
     index = pd.date_range("2022-01-01", periods=4, freq="h")
-    forecaster = NaiveForecast(index, availability=1, price_forecast=50)
+    forecaster = UnitForecaster(index, availability=1, market_prices={"EOM": 50})
     return Storage(
         id="Test_Storage",
         unit_operator="TestOperator",
         technology="TestTechnology",
-        bidding_strategies={"EOM": NaiveSingleBidStrategy()},
+        bidding_strategies={"EOM": StorageEnergyHeuristicFlexableStrategy()},
         forecaster=forecaster,
         max_power_charge=-100,
         max_power_discharge=100,
-        max_soc=1000,
+        capacity=1000,
         efficiency_charge=0.9,
         efficiency_discharge=0.95,
         ramp_down_charge=-50,
@@ -36,7 +35,7 @@ def storage_unit() -> Storage:
         additional_cost_charge=3,
         additional_cost_discharge=4,
         additional_cost=1,
-        initial_soc=500,
+        initial_soc=None,
     )
 
 
@@ -52,7 +51,7 @@ def test_init_function(storage_unit):
     assert storage_unit.ramp_down_discharge == 50
     assert storage_unit.ramp_up_charge == -60
     assert storage_unit.ramp_up_discharge == 60
-    assert storage_unit.initial_soc == 500
+    assert storage_unit.initial_soc == 0.5
 
 
 def test_reset_function(storage_unit):
@@ -75,7 +74,7 @@ def test_reset_function(storage_unit):
     # check if state of charge (soc) is reset correctly
     assert (
         storage_unit.outputs["soc"]
-        == pd.Series(500.0, index=pd.date_range("2022-01-01", periods=4, freq="h"))
+        == pd.Series(0.5, index=pd.date_range("2022-01-01", periods=4, freq="h"))
     ).all()
 
 
@@ -130,20 +129,15 @@ def test_soc_constraint(storage_unit):
     storage_unit.outputs["capacity_neg"][start] = -50
     storage_unit.outputs["capacity_pos"][start] = 30
 
-    storage_unit.outputs["soc"][start - timedelta(hours=1)] = (
-        0.05 * storage_unit.max_soc
-    )
-    assert (
-        storage_unit.outputs["soc"][start - storage_unit.index.freq]
-        == 0.05 * storage_unit.max_soc
-    )
+    storage_unit.outputs["soc"][start - timedelta(hours=1)] = 0.05
+    assert storage_unit.outputs["soc"][start - storage_unit.index.freq] == 0.05
     min_power_discharge, max_power_discharge = storage_unit.calculate_min_max_discharge(
         start, end
     )
     assert min_power_discharge[0] == 40
     assert max_power_discharge[0] == 60
 
-    storage_unit.outputs["soc"][start] = 0.95 * storage_unit.max_soc
+    storage_unit.outputs["soc"][start] = 0.95
     min_power_charge, max_power_charge = storage_unit.calculate_min_max_charge(
         start, end
     )
@@ -228,9 +222,9 @@ def test_storage_ramping(storage_unit):
     assert max_power_discharge[0] == 100
 
     max_ramp_discharge = storage_unit.calculate_ramp_discharge(
-        500, 0, max_power_discharge[0]
+        0.5, 0, max_power_discharge[0]
     )
-    max_ramp_charge = storage_unit.calculate_ramp_charge(500, 0, max_power_charge[0])
+    max_ramp_charge = storage_unit.calculate_ramp_charge(0.5, 0, max_power_charge[0])
 
     assert max_ramp_discharge == 60
     assert max_ramp_charge == -60
@@ -243,9 +237,9 @@ def test_storage_ramping(storage_unit):
     end = datetime(2022, 1, 1, 2)
 
     max_ramp_discharge = storage_unit.calculate_ramp_discharge(
-        500, 60, max_power_discharge[0]
+        0.5, 60, max_power_discharge[0]
     )
-    max_ramp_charge = storage_unit.calculate_ramp_charge(500, 60, max_power_charge[0])
+    max_ramp_charge = storage_unit.calculate_ramp_charge(0.5, 60, max_power_charge[0])
 
     assert max_ramp_discharge == 100
     assert max_ramp_charge == -60
@@ -258,9 +252,9 @@ def test_storage_ramping(storage_unit):
     end = datetime(2022, 1, 1, 3)
 
     max_ramp_discharge = storage_unit.calculate_ramp_discharge(
-        500, -60, max_power_discharge[0]
+        0.5, -60, max_power_discharge[0]
     )
-    max_ramp_charge = storage_unit.calculate_ramp_charge(500, -60, max_power_charge[0])
+    max_ramp_charge = storage_unit.calculate_ramp_charge(0.5, -60, max_power_charge[0])
 
     assert max_ramp_discharge == 60
     assert max_ramp_charge == -100
@@ -271,35 +265,35 @@ def test_execute_dispatch(storage_unit):
     end = datetime(2022, 1, 1, 2)
 
     storage_unit.outputs["energy"][start] = 100
-    storage_unit.outputs["soc"][start] = 0.5 * storage_unit.max_soc
+    storage_unit.outputs["soc"][start] = 0.5
 
     # dispatch full discharge
     dispatched_energy = storage_unit.execute_current_dispatch(start, end)
     assert dispatched_energy[0] == 100
     assert math.isclose(
         storage_unit.outputs["soc"][end],
-        500 - 100 / storage_unit.efficiency_discharge,
+        (500 - 100 / storage_unit.efficiency_discharge) / storage_unit.capacity,
     )
 
     # dispatch full charging
     storage_unit.outputs["energy"][start] = -100
-    storage_unit.outputs["soc"][start] = 0.5 * storage_unit.max_soc
+    storage_unit.outputs["soc"][start] = 0.5
     dispatched_energy = storage_unit.execute_current_dispatch(start, end)
     assert dispatched_energy[0] == -100
     assert math.isclose(
         storage_unit.outputs["soc"][end],
-        500 + 100 * storage_unit.efficiency_charge,
+        (500 + 100 * storage_unit.efficiency_charge) / storage_unit.capacity,
     )
     # adjust dispatch to soc limit for discharge
     storage_unit.outputs["energy"][start] = 100
-    storage_unit.outputs["soc"][start] = 0.05 * storage_unit.max_soc
+    storage_unit.outputs["soc"][start] = 0.05
     dispatched_energy = storage_unit.execute_current_dispatch(start, end)
     assert math.isclose(
         dispatched_energy[0], 50 * storage_unit.efficiency_discharge, abs_tol=0.1
     )
     # adjust dispatch to soc limit for charging
     storage_unit.outputs["energy"][start] = -100
-    storage_unit.outputs["soc"][start] = 0.95 * storage_unit.max_soc
+    storage_unit.outputs["soc"][start] = 0.95
     dispatched_energy = storage_unit.execute_current_dispatch(start, end)
     assert math.isclose(
         dispatched_energy[0], -50 / storage_unit.efficiency_charge, abs_tol=0.1
@@ -325,11 +319,11 @@ def test_set_dispatch_plan(mock_market_config, storage_unit):
 
     mc = mock_market_config
 
-    strategy = flexableEOMStorage()
+    strategy = StorageEnergyHeuristicFlexableStrategy()
     product_tuples = [(start, end, None)]
 
     storage_unit.outputs["energy"][start] = 100
-    storage_unit.outputs["soc"][start] = 0.5 * storage_unit.max_soc
+    storage_unit.outputs["soc"][start] = 0.5
 
     bids = strategy.calculate_bids(storage_unit, mc, product_tuples=product_tuples)
     assert len(bids) == 0
@@ -341,11 +335,11 @@ def test_set_dispatch_plan(mock_market_config, storage_unit):
     assert storage_unit.outputs["energy"][start] == 100
     assert math.isclose(
         storage_unit.outputs["soc"][end],
-        500 - 100 / storage_unit.efficiency_discharge,
+        (500 - 100 / storage_unit.efficiency_discharge) / storage_unit.capacity,
     )
     # dispatch full charging
     storage_unit.outputs["energy"][start] = -100
-    storage_unit.outputs["soc"][start] = 0.5 * storage_unit.max_soc
+    storage_unit.outputs["soc"][start] = 0.5
 
     storage_unit.set_dispatch_plan(mc, bids)
     storage_unit.execute_current_dispatch(start, end)
@@ -353,11 +347,11 @@ def test_set_dispatch_plan(mock_market_config, storage_unit):
     assert storage_unit.outputs["energy"][start] == -100
     assert math.isclose(
         storage_unit.outputs["soc"][end],
-        500 + 100 * storage_unit.efficiency_charge,
+        (500 + 100 * storage_unit.efficiency_charge) / storage_unit.capacity,
     )
     # adjust dispatch to soc limit for discharge
     storage_unit.outputs["energy"][start] = 100
-    storage_unit.outputs["soc"][start] = 0.05 * storage_unit.max_soc
+    storage_unit.outputs["soc"][start] = 0.05
 
     storage_unit.set_dispatch_plan(mc, bids)
     storage_unit.execute_current_dispatch(start, end)
@@ -369,7 +363,7 @@ def test_set_dispatch_plan(mock_market_config, storage_unit):
     )
     # adjust dispatch to soc limit for charging
     storage_unit.outputs["energy"][start] = -100
-    storage_unit.outputs["soc"][start] = 0.95 * storage_unit.max_soc
+    storage_unit.outputs["soc"][start] = 0.95
 
     storage_unit.set_dispatch_plan(mc, bids)
     storage_unit.execute_current_dispatch(start, end)
@@ -405,10 +399,10 @@ def test_set_dispatch_plan_multi_hours(mock_market_config, storage_unit):
         product_tuples.append((s, end, None))
 
     mc = mock_market_config
-    strategy = flexableEOMStorage()
+    strategy = StorageEnergyHeuristicFlexableStrategy()
 
     storage_unit.outputs["energy"][start] = 100
-    storage_unit.outputs["soc"][start] = 0.5 * storage_unit.max_soc
+    storage_unit.outputs["soc"][start] = 0.5
 
     bids = strategy.calculate_bids(storage_unit, mc, product_tuples=product_tuples)
     assert len(bids) == 2
@@ -441,7 +435,9 @@ def test_set_dispatch_plan_multi_hours(mock_market_config, storage_unit):
             delta_set_dispatch = (
                 storage_unit.outputs["energy"][s] / storage_unit.efficiency_discharge
             )
-        assert math.isclose(delta_set_dispatch, delta_soc_set_dispatch)
+        assert math.isclose(
+            delta_set_dispatch / storage_unit.capacity, delta_soc_set_dispatch
+        )
 
     # test if it is executed correctly, which should be the same with the mock market config only covering one market
     storage_unit.execute_current_dispatch(start, end)
@@ -457,10 +453,125 @@ def test_set_dispatch_plan_multi_hours(mock_market_config, storage_unit):
             delta = (
                 storage_unit.outputs["energy"][s] / storage_unit.efficiency_discharge
             )
-        assert math.isclose(delta, delta_soc)
+        assert math.isclose(delta / storage_unit.capacity, delta_soc)
 
     # check that deltas are the same, which again must be due to only one considered market
     assert math.isclose(delta_soc_set_dispatch, delta_soc)
+
+
+def test_initialising_invalid_storages():
+    index = pd.date_range(
+        start=datetime(2023, 7, 1),
+        end=datetime(2023, 7, 2),
+        freq="1h",
+    )
+    param_dict = {
+        "id": "id",
+        "unit_operator": "operator",
+        "technology": "technology",
+        "bidding_strategies": {},
+        "forecaster": UnitForecaster(index=index),
+        "max_power_charge": 0.0,
+        "max_power_discharge": 0.0,
+        "max_soc": 0.0,
+        "capacity": 0.0,
+    }
+    with pytest.raises(
+        ValueError, match="max_power_charge=10 must be <= 0 for unit id"
+    ):
+        d = param_dict.copy()
+        d["max_power_charge"] = 10
+        Storage(**d)
+    with pytest.raises(
+        ValueError, match="min_power_charge=10 must be <= 0 for unit id"
+    ):
+        d = param_dict.copy()
+        d["min_power_charge"] = 10
+        Storage(**d)
+    with pytest.raises(
+        ValueError,
+        match="max_power_charge=-10 must be <= min_power_charge=-20 for unit id",
+    ):
+        d = param_dict.copy()
+        d["max_power_charge"] = -10
+        d["min_power_charge"] = -20
+        Storage(**d)
+    with pytest.raises(
+        ValueError, match="max_power_discharge=-10 must be >= 0 for unit id"
+    ):
+        d = param_dict.copy()
+        d["max_power_discharge"] = -10
+        Storage(**d)
+    with pytest.raises(
+        ValueError, match="min_power_discharge=-10 must be >= 0 for unit id"
+    ):
+        d = param_dict.copy()
+        d["min_power_discharge"] = -10
+        Storage(**d)
+    with pytest.raises(
+        ValueError,
+        match="max_power_discharge=10 must be >= min_power_discharge=20 for unit id",
+    ):
+        d = param_dict.copy()
+        d["max_power_discharge"] = 10
+        d["min_power_discharge"] = 20
+        Storage(**d)
+    with pytest.raises(
+        ValueError, match="efficiency_charge=1.1 must be between 0 and 1 for unit id"
+    ):
+        d = param_dict.copy()
+        d["efficiency_charge"] = 1.1
+        Storage(**d)
+    with pytest.raises(
+        ValueError, match="efficiency_discharge=1.1 must be between 0 and 1 for unit id"
+    ):
+        d = param_dict.copy()
+        d["efficiency_discharge"] = 1.1
+        Storage(**d)
+    with pytest.raises(ValueError, match="ramp_up_charge=10 must be <= 0 for unit id"):
+        d = param_dict.copy()
+        d["ramp_up_charge"] = 10
+        Storage(**d)
+    with pytest.raises(
+        ValueError, match="ramp_down_charge=10 must be <= 0 for unit id"
+    ):
+        d = param_dict.copy()
+        d["ramp_down_charge"] = 10
+        Storage(**d)
+    with pytest.raises(
+        ValueError, match="ramp_up_discharge=-10 must be >= 0 for unit id"
+    ):
+        d = param_dict.copy()
+        d["ramp_up_discharge"] = -10
+        Storage(**d)
+    with pytest.raises(
+        ValueError, match="ramp_down_discharge=-10 must be >= 0 for unit id"
+    ):
+        d = param_dict.copy()
+        d["ramp_down_discharge"] = -10
+        Storage(**d)
+    with pytest.raises(
+        ValueError, match="min_operating_time=-10 must be >= 0 for unit id"
+    ):
+        d = param_dict.copy()
+        d["min_operating_time"] = -10
+        Storage(**d)
+    with pytest.raises(ValueError, match="min_down_time=-10 must be >= 0 for unit id"):
+        d = param_dict.copy()
+        d["min_down_time"] = -10
+        Storage(**d)
+    with pytest.raises(
+        ValueError, match="downtime_hot_start=-10 must be >= 0 for unit id"
+    ):
+        d = param_dict.copy()
+        d["downtime_hot_start"] = -10
+        Storage(**d)
+    with pytest.raises(
+        ValueError, match="downtime_warm_start=-10 must be >= 0 for unit id"
+    ):
+        d = param_dict.copy()
+        d["downtime_warm_start"] = -10
+        Storage(**d)
 
 
 if __name__ == "__main__":

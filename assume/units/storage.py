@@ -9,8 +9,9 @@ from functools import lru_cache
 import numpy as np
 
 from assume.common.base import SupportsMinMaxCharge
+from assume.common.exceptions import ValidationError
 from assume.common.fast_pandas import FastSeries
-from assume.common.forecasts import Forecaster
+from assume.common.forecaster import UnitForecaster
 
 logger = logging.getLogger(__name__)
 EPS = 1e-4
@@ -28,9 +29,10 @@ class Storage(SupportsMinMaxCharge):
         min_power_charge (float): The minimum power input of the storage unit in MW (negative value).
         max_power_discharge (float): The maximum power output of the storage unit in MW.
         min_power_discharge (float): The minimum power output of the storage unit in MW.
-        max_soc (float): The maximum state of charge of the storage unit in MWh (equivalent to capacity).
-        min_soc (float): The minimum state of charge of the storage unit in MWh.
-        initial_soc (float): The initial state of charge of the storage unit in MWh.
+        capacity (float): The capacity of the storage unit in MWh.
+        max_soc (float): The maximum state of charge of the storage unit as a fraction (typically 1).
+        min_soc (float): The minimum state of charge of the storage unit as a fraction (typically 0).
+        initial_soc (float): The initial state of charge of the storage unit as a fraction (between 0 and 1).
         efficiency_charge (float): The efficiency of the storage unit while charging.
         efficiency_discharge (float): The efficiency of the storage unit while discharging.
         additional_cost_charge (float, optional): Additional costs associated with power consumption, in EUR/MWh. Defaults to 0.
@@ -57,28 +59,29 @@ class Storage(SupportsMinMaxCharge):
         unit_operator: str,
         technology: str,
         bidding_strategies: dict,
-        forecaster: Forecaster,
+        forecaster: UnitForecaster,
         max_power_charge: float,
         max_power_discharge: float,
-        max_soc: float,
+        capacity: float,
         min_power_charge: float = 0.0,
         min_power_discharge: float = 0.0,
         min_soc: float = 0.0,
-        initial_soc: float = 0.0,
+        max_soc: float = 1.0,
+        initial_soc: float | None = 0.0,
         soc_tick: float = 0.01,
         efficiency_charge: float = 1,
         efficiency_discharge: float = 1,
         additional_cost_charge: float = 0.0,
         additional_cost_discharge: float = 0.0,
-        ramp_up_charge: float = None,
-        ramp_down_charge: float = None,
-        ramp_up_discharge: float = None,
-        ramp_down_discharge: float = None,
+        ramp_up_charge: float | None = None,
+        ramp_down_charge: float | None = None,
+        ramp_up_discharge: float | None = None,
+        ramp_down_discharge: float | None = None,
         hot_start_cost: float = 0,
         warm_start_cost: float = 0,
         cold_start_cost: float = 0,
-        min_operating_time: float = 0,
-        min_down_time: float = 0,
+        min_operating_time: float = 0,  # hours
+        min_down_time: float = 0,  # hours
         downtime_hot_start: int = 8,  # hours
         downtime_warm_start: int = 48,  # hours
         location: tuple[float, float] = (0, 0),
@@ -95,28 +98,108 @@ class Storage(SupportsMinMaxCharge):
             location=location,
             **kwargs,
         )
-
+        if capacity < 0:
+            raise ValidationError(
+                message=f"{capacity=} must be >= 0 for unit {self.id}",
+                id=self.id,
+                field="",
+            )
+        if not 0 <= min_soc <= 1:
+            raise ValidationError(
+                message=f"{min_soc=} must be between 0 and 1 for unit {self.id}",
+                id=self.id,
+                field="",
+            )
+        if not 0 <= max_soc <= 1:
+            raise ValidationError(
+                message=f"{max_soc=} must be between 0 and 1 for unit {self.id}",
+                id=self.id,
+                field="",
+            )
+        if max_soc < min_soc:
+            raise ValidationError(
+                message=f"{max_soc=} must be >= {min_soc=} for unit {self.id}",
+                id=self.id,
+                field="",
+            )
+        self.capacity = capacity
         self.max_soc = max_soc
         self.min_soc = min_soc
         if initial_soc is None:
-            initial_soc = max_soc / 2
+            initial_soc = 0.5
+        if not 0 <= initial_soc <= 1:
+            raise ValidationError(
+                f"{initial_soc=} must be between 0 and 1 for unit {self.id}",
+                id=self.id,
+                field="initial_soc",
+            )
         self.initial_soc = initial_soc
 
-        self.max_power_charge = -abs(max_power_charge)
-        self.min_power_charge = -abs(min_power_charge)
-        self.max_power_discharge = abs(max_power_discharge)
-        self.min_power_discharge = abs(min_power_discharge)
+        if max_power_charge > 0:
+            raise ValidationError(
+                message=f"{max_power_charge=} must be <= 0 for unit {self.id}",
+                id=self.id,
+                field="max_power_charge",
+            )
+        if min_power_charge > 0:
+            raise ValidationError(
+                message=f"{min_power_charge=} must be <= 0 for unit {self.id}",
+                id=self.id,
+                field="min_power_charge",
+            )
+        if max_power_charge > min_power_charge:
+            raise ValidationError(
+                f"{max_power_charge=} must be <= {min_power_charge=} for unit {self.id}",
+                id=self.id,
+                field="max_power_charge",
+            )
+        if max_power_discharge < 0:
+            raise ValidationError(
+                message=f"{max_power_discharge=} must be >= 0 for unit {self.id}",
+                id=self.id,
+                field="max_power_discharge",
+            )
+        if min_power_discharge < 0:
+            raise ValidationError(
+                message=f"{min_power_discharge=} must be >= 0 for unit {self.id}",
+                id=self.id,
+                field="min_power_discharge",
+            )
+        if max_power_discharge < min_power_discharge:
+            raise ValueError(
+                f"{max_power_discharge=} must be >= {min_power_discharge=} for unit {self.id}"
+            )
+        self.max_power_charge = max_power_charge
+        self.min_power_charge = min_power_charge
+        self.max_power_discharge = max_power_discharge
+        self.min_power_discharge = min_power_discharge
 
         self.outputs["soc"] = FastSeries(value=self.initial_soc, index=self.index)
         self.outputs["cost_stored_energy"] = FastSeries(value=0.0, index=self.index)
 
+        if soc_tick < 0:
+            raise ValidationError(
+                message=f"{soc_tick=} must be >= 0 for unit {self.id}",
+                id=self.id,
+                field="soc_tick",
+            )
         self.soc_tick = soc_tick
 
+        if not 0 <= efficiency_charge <= 1:
+            raise ValidationError(
+                f"{efficiency_charge=} must be between 0 and 1 for unit {self.id}",
+                id=self.id,
+                field="efficiency_charge",
+            )
+        if not 0 <= efficiency_discharge <= 1:
+            raise ValidationError(
+                f"{efficiency_discharge=} must be between 0 and 1 for unit {self.id}",
+                id=self.id,
+                field="efficiency_discharge",
+            )
         # The efficiency of the storage unit while charging.
-        self.efficiency_charge = efficiency_charge if 0 < efficiency_charge < 1 else 1
-        self.efficiency_discharge = (
-            efficiency_discharge if 0 < efficiency_discharge < 1 else 1
-        )
+        self.efficiency_charge = efficiency_charge
+        self.efficiency_discharge = efficiency_discharge
 
         # The variable costs to charge/discharge the storage unit.
         self.additional_cost_charge = additional_cost_charge
@@ -125,34 +208,66 @@ class Storage(SupportsMinMaxCharge):
         # The ramp up/down rate of charging/discharging the storage unit.
         # if ramp_up_charge == 0, the ramp_up_charge is set to enable ramping between full charge and discharge power
         # else the ramp_up_charge is set to the negative value of the ramp_up_charge
-        self.ramp_up_charge = (
-            self.max_power_charge - self.max_power_discharge
-            if not ramp_up_charge
-            else -abs(ramp_up_charge)
-        )
-        self.ramp_down_charge = (
-            self.max_power_charge - self.max_power_discharge
-            if not ramp_down_charge
-            else -abs(ramp_down_charge)
-        )
-        self.ramp_up_discharge = (
-            self.max_power_discharge - self.max_power_charge
-            if not ramp_up_discharge
-            else ramp_up_discharge
-        )
-        self.ramp_down_discharge = (
-            self.max_power_discharge - self.max_power_charge
-            if not ramp_down_discharge
-            else ramp_down_discharge
-        )
+        if ramp_up_charge is not None and ramp_up_charge > 0:
+            raise ValidationError(
+                message=f"{ramp_up_charge=} must be <= 0 for unit {self.id}",
+                id=self.id,
+                field="ramp_up_charge",
+            )
+        if ramp_down_charge is not None and ramp_down_charge > 0:
+            raise ValidationError(
+                message=f"{ramp_down_charge=} must be <= 0 for unit {self.id}",
+                id=self.id,
+                field="ramp_down_charge",
+            )
+        if ramp_up_discharge is not None and ramp_up_discharge < 0:
+            raise ValidationError(
+                message=f"{ramp_up_discharge=} must be >= 0 for unit {self.id}",
+                id=self.id,
+                field="ramp_up_discharge",
+            )
+        if ramp_down_discharge is not None and ramp_down_discharge < 0:
+            raise ValidationError(
+                message=f"{ramp_down_discharge=} must be >= 0 for unit {self.id}",
+                id=self.id,
+                field="ramp_down_discharge",
+            )
+        self.ramp_up_charge = ramp_up_charge
+        self.ramp_down_charge = ramp_down_charge
+        self.ramp_up_discharge = ramp_up_discharge
+        self.ramp_down_discharge = ramp_down_discharge
 
         # How long the storage unit has to be in operation before it can be shut down.
+        if min_operating_time < 0:
+            raise ValidationError(
+                message=f"{min_operating_time=} must be >= 0 for unit {self.id}",
+                id=self.id,
+                field="min_operating_time",
+            )
         self.min_operating_time = min_operating_time
         # How long the storage unit has to be shut down before it can be started.
+        if min_down_time < 0:
+            raise ValidationError(
+                message=f"{min_down_time=} must be >= 0 for unit {self.id}",
+                id=self.id,
+                field="min_down_time",
+            )
         self.min_down_time = min_down_time
         # The downtime before hot start of the storage unit.
+        if downtime_hot_start < 0:
+            raise ValidationError(
+                message=f"{downtime_hot_start=} must be >= 0 for unit {self.id}",
+                id=self.id,
+                field="downtime_hot_start",
+            )
         self.downtime_hot_start = downtime_hot_start
         # The downtime before warm start of the storage unit.
+        if downtime_warm_start < 0:
+            raise ValidationError(
+                message=f"{downtime_warm_start=} must be >= 0 for unit {self.id}",
+                id=self.id,
+                field="downtime_warm_start",
+            )
         self.downtime_warm_start = downtime_warm_start
 
         self.hot_start_cost = hot_start_cost * max_power_discharge
@@ -185,8 +300,7 @@ class Storage(SupportsMinMaxCharge):
             elif current_power < self.max_power_charge:
                 current_power = self.max_power_charge
             elif (
-                current_power < self.min_power_discharge
-                and current_power > self.min_power_charge
+                self.min_power_discharge > current_power > self.min_power_charge
                 and current_power != 0
             ):
                 current_power = 0
@@ -202,7 +316,9 @@ class Storage(SupportsMinMaxCharge):
                 if current_power > max_soc_discharge:
                     current_power = max_soc_discharge
 
-                delta_soc = -current_power * time_delta / self.efficiency_discharge
+                delta_soc = (
+                    -current_power * time_delta / self.efficiency_discharge
+                ) / self.capacity
 
             # charging
             elif current_power < 0:
@@ -211,7 +327,9 @@ class Storage(SupportsMinMaxCharge):
                 if current_power < max_soc_charge:
                     current_power = max_soc_charge
 
-                delta_soc = -current_power * time_delta * self.efficiency_charge
+                delta_soc = (
+                    -current_power * time_delta * self.efficiency_charge
+                ) / self.capacity
 
             # update the values of the state of charge and the energy
             next_freq = t + self.index.freq
@@ -253,15 +371,20 @@ class Storage(SupportsMinMaxCharge):
         Calculates the maximum discharge power depending on the current state of charge.
 
         Args:
-            soc (float): The current state of charge.
+            soc (float): The current state of charge (between 0 and 1).
 
         Returns:
-            float: The maximum discharge power.
+            float: The maximum discharge power in MW.
         """
         duration = self.index.freq / timedelta(hours=1)
         power = max(
             0,
-            ((soc - self.min_soc) * self.efficiency_discharge / duration),
+            (
+                (soc - self.min_soc)
+                * self.capacity
+                * self.efficiency_discharge
+                / duration
+            ),
         )
         return power
 
@@ -273,15 +396,15 @@ class Storage(SupportsMinMaxCharge):
         Calculates the maximum charge power depending on the current state of charge.
 
         Args:
-            soc (float): The current state of charge.
+            soc (float): The current state of charge (between 0 and 1).
 
         Returns:
-            float: The maximum charge power.
+            float: The maximum charge power in MW.
         """
         duration = self.index.freq / timedelta(hours=1)
         power = min(
             0,
-            ((soc - self.max_soc) / self.efficiency_charge / duration),
+            ((soc - self.max_soc) * self.capacity / self.efficiency_charge / duration),
         )
         return power
 
@@ -296,7 +419,7 @@ class Storage(SupportsMinMaxCharge):
         Args:
             start (datetime.datetime): The start of the current dispatch.
             end (datetime.datetime): The end of the current dispatch.
-            soc (float): The current state-of-charge. Defaults to None, then using soc at given start time.
+            soc (float): The current state-of-charge (between 0 and 1). Defaults to None, then using soc at given start time.
 
         Returns:
             tuple[np.ndarray, np.ndarray]: The minimum and maximum charge power levels of the storage unit in MW.
@@ -338,7 +461,7 @@ class Storage(SupportsMinMaxCharge):
         Args:
             start (datetime.datetime): The start of the current dispatch.
             end (datetime.datetime): The end of the current dispatch.
-            soc (float): The current state-of-charge. Defaults to None, then using soc at given start time.
+            soc (float): The current state-of-charge (between 0 and 1). Defaults to None, then using soc at given start time.
 
         Returns:
             tuple[np.ndarray, np.ndarray]: The minimum and maximum discharge power levels of the storage unit in MW.
@@ -385,7 +508,7 @@ class Storage(SupportsMinMaxCharge):
         Adjusts the discharging power to the ramping constraints.
 
         Args:
-            soc (float): The current state of charge.
+            soc (float): The current state of charge (between 0 and 1).
             previous_power (float): The previous power output of the unit.
             power_discharge (float): The discharging power output of the unit.
             current_power (float, optional): The current power output of the unit. Defaults to 0.
@@ -420,7 +543,7 @@ class Storage(SupportsMinMaxCharge):
         Adjusts the charging power to the ramping constraints.
 
         Args:
-            soc (float): The current state of charge.
+            soc (float): The current state of charge (between 0 and 1).
             previous_power (float): The previous power output of the unit.
             power_charge (float): The charging power output of the unit.
             current_power (float, optional): The current power output of the unit. Defaults to 0.
@@ -474,6 +597,7 @@ class Storage(SupportsMinMaxCharge):
         unit_dict = super().as_dict()
         unit_dict.update(
             {
+                "capacity": self.capacity,
                 "max_soc": self.max_soc,
                 "min_soc": self.min_soc,
                 "max_power_charge": self.max_power_charge,

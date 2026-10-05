@@ -3,15 +3,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=80", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "assume-framework"
-version = "0.5.5"
+dynamic = ["version"]
 description = "ASSUME - Agent-Based Electricity Markets Simulation Toolbox"
 authors = [{ name = "ASSUME Developers", email = "contact@assume-project.de"}]
-license = {text = "AGPL-3.0-or-later"}
+license = "AGPL-3.0-or-later"
 readme = "README.md"
 keywords = ["agent based simulation", "energy market", "reinforcement learning", "market simulation", "simulation"]
 
@@ -27,22 +27,22 @@ classifiers=[
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 requires-python = ">=3.10"
 dependencies = [
     "argcomplete >=3.1.4",
-    "nest-asyncio >=1.5.6",
+    "nest-asyncio2 >=1.7.2",
     "mango-agents >=2.1.3",
     "numpy >=1.26.4",
     "tqdm >=4.64.1",
     "python-dateutil >=2.8.2",
     "sqlalchemy >=2.0.9",
-    "pandas >=2.0.0",
+    "pandas >=2.3.0",
     "psycopg2-binary >=2.9.5",
     "pyyaml >=6.0",
-    "pyyaml-include >=2.2a",
     "pyomo >=6.8.0",
-    "xarray <2025.7.0", # https://github.com/PyPSA/linopy/issues/470
+    "xarray <v2026.04.0", # https://github.com/assume-framework/assume/issues/790
     "highspy",
     "python-dotenv",
 ]
@@ -51,9 +51,10 @@ dependencies = [
 learning = [
     "torch >=2.0.1",
     "tensorboard >=2.7.0",
+    "setuptools <82" # https://github.com/tensorflow/tensorboard/issues/7003
 ]
 network = [
-    "pypsa <0.33",
+    "pypsa",
 ]
 oeds = [
     "demandlib >=0.1.9",
@@ -63,15 +64,25 @@ oeds = [
     "windpowerlib >=0.2.1",
 ]
 test = [
-    "ruff >=0.4.9",
+    "ruff >=0.14.6",
     "mypy >=1.1.1",
     "matplotlib >=3.7.2",
-    "pytest >=7.2.2",
-    "pytest-cov >=4.1.0",
-    "pytest-asyncio >=0.21.1",
+    "pytest >=9",
+    "pytest-cov >=7.0.0",
+    "pytest-asyncio >=1.3.0",
+    "pre-commit >=4.0.0"
 ]
 all = [
-    "assume-framework[oeds, network, learning]",
+    "assume-framework[oeds, network, learning, test]",
+]
+docs = [
+  "sphinx >=8",
+  "sphinx-book-theme >=1.1.4",
+  "nbsphinx >=0.9.7",
+  "nbsphinx-link >= 1.3.1",
+  "sphinx-argparse >= 0.6.0",
+  "sphinxcontrib-mermaid >=1.0.0",
+  "ipython >=9",
 ]
 comando = [
     "comando",
@@ -88,8 +99,11 @@ Changelog = "https://assume.readthedocs.io/en/latest/release_notes.html"
 [project.scripts]
 assume = "assume_cli.cli:cli"
 
-[tool.setuptools]
-packages = {find = {}}
+[tool.setuptools.packages.find]
+include = ["assume*", "assume_cli*"]
+exclude = ["assume-db*"]
+
+[tool.setuptools_scm]
 
 [tool.ruff]
 
@@ -115,9 +129,7 @@ ignore = ["E501", "G004", "E731"]
 ]
 
 [tool.pytest]
-testpaths = "tests"
-
-[tool.pytest.ini_options]
+testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
@@ -130,8 +142,9 @@ filterwarnings = [
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "require_learning",
+    "require_network",
 ]
-addopts = "--ignore=assume-db"
+addopts = ["--ignore=assume-db"]
 
 [tool.coverage.run]
 omit = ["tests/*"]
