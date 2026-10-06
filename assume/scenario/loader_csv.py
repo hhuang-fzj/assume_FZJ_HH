@@ -945,7 +945,6 @@ def setup_world(
     demand_units = scenario_data["demand_units"]
     exchange_units = scenario_data["exchange_units"]
     dsm_units = scenario_data["dsm_units"]
-    forecaster = scenario_data["forecaster"]
     EVcharging_units = scenario_data["EVcharging_units"]
     unit_forecasts = scenario_data["unit_forecasts"]
     forecasts_df = scenario_data["forecasts_df"]
@@ -1074,9 +1073,9 @@ def setup_world(
     EVcharging_units = read_units(
         units_df=EVcharging_units,
         unit_type="V2G_Charging",
-        forecaster=forecaster,
+        forecaster=unit_forecasts,
         world_bidding_strategies=world.bidding_strategies,
-        learning_mode=learning_config["learning_mode"],
+        learning_mode=learning_mode,
     )
 
     demand_units = read_units(

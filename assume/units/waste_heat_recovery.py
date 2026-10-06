@@ -5,11 +5,10 @@
 import logging
 
 import pyomo.environ as pyo
-from assume.common import Forecaster
 import pandas as pd
 
 from assume.common.base import SupportsMinMax
-from assume.common.forecasts import Forecaster
+from assume.common.forecaster import UnitForecaster
 from assume.units.comando_facade import ComandoFacade
 
 from comando.core import System
@@ -29,7 +28,7 @@ class WasteHeatRecovery(ComandoFacade, SupportsMinMax):
             id: str,
             unit_operator: str,
             bidding_strategies: dict,
-            forecaster: Forecaster,
+            forecaster: UnitForecaster,
             components: dict[str, dict] = None,
             technology: str = "waste_heat_recovery",
             objective: str = "min_variable_cost",
