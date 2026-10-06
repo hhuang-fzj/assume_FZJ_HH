@@ -217,7 +217,7 @@ class StorageEnergyHeuristicFlexableStrategy(MinMaxChargeStrategy):
             )
             unit.outputs["total_costs"].loc[start:end_excl] = costs
 
-class flexableEOMEV(BaseStrategy):
+class flexableEOMEV(MinMaxChargeStrategy):
     """
     A flexableEOMStorage-based bidding strategy for bidirectional EV charging stations.
 

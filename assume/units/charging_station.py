@@ -14,7 +14,7 @@ from assume.common.market_objects import MarketConfig, Orderbook
 
 from assume.common.base import SupportsMinMaxCharge
 from assume.common.fast_pandas import FastSeries
-from assume.common.forecasts import Forecaster
+from assume.common.forecaster import UnitForecaster
 
 logger = logging.getLogger(__name__)
 EPS = 1e-4
@@ -32,7 +32,7 @@ class V2gChargingRB(SupportsMinMaxCharge):
         unit_operator (str): The operator of the charging station.
         technology (str): The technology of the charging station.
         bidding_strategies (dict): The bidding strategies of the charging station.
-        forecaster (Forecaster): The forecaster providing market data and EV schedules.
+        forecaster (UnitForecaster): The forecaster providing market data and EV schedules.
         node (str): The node of the charging station.
         max_power_charge (float): The maximum power input of the charging station in MW.
         min_power_charge (float): The minimum power input of the charging station in MW.
@@ -73,7 +73,7 @@ class V2gChargingRB(SupportsMinMaxCharge):
         unit_operator: str,
         technology: str,
         bidding_strategies: dict,
-        forecaster: Forecaster,
+        forecaster: UnitForecaster,
         max_power_charge: float,
         max_power_discharge: float,
         max_soc: float,
