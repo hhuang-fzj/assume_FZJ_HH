@@ -196,12 +196,12 @@ class DsmEnergyOptimizationStrategy(MinMaxStrategy):
             """
             start = product[0]
             price = 0
-            if market_config.market_id == 'LLEC':
-                volume = unit.opt_power_volume.at[start]
-                price = 50
-            elif market_config.market_id == 'HTH':
+            if market_config.market_id == 'HTH':
                 volume = unit.opt_HT_heat_volume.at[start]
                 price = 93.7
+            else:
+                volume = unit.opt_power_requirement.at[start]
+                price = 50
             bids.append(
                 {
                     "start_time": start,
