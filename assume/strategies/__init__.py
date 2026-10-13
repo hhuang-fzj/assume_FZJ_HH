@@ -101,7 +101,8 @@ try:
         EnergyLearningSingleBidStrategy,
         StorageEnergyLearningStrategy,
         RenewableEnergyLearningSingleBidStrategy,
-    )
+        BuildingEnergyLearningSingleBidStrategy,
+)
 
     deprecated_bidding_strategies["pp_learning"] = EnergyLearningStrategy
     deprecated_bidding_strategies["storage_learning"] = StorageEnergyLearningStrategy
@@ -117,6 +118,9 @@ try:
     bidding_strategies["storage_energy_learning"] = StorageEnergyLearningStrategy
     bidding_strategies["renewable_energy_learning_single_bid"] = (
         RenewableEnergyLearningSingleBidStrategy
+    )
+    bidding_strategies["building_energy_learning_single_bid"] = (
+        BuildingEnergyLearningSingleBidStrategy
     )
 
     from assume.strategies.portfolio_learning_strategies import (

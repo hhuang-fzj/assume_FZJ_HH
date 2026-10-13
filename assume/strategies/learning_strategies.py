@@ -1331,3 +1331,223 @@ class RenewableEnergyLearningSingleBidStrategy(EnergyLearningSingleBidStrategy):
             self.learning_role.add_reward_to_cache(
                 unit.id, start, reward, regret, profit
             )
+
+class BuildingEnergyLearningSingleBidStrategy(TorchLearningStrategy, MinMaxStrategy):
+    """
+    Reinforcement Learning Strategy with Single-Bid Structure for Energy-Only Markets.
+
+    This strategy is a simplified variant of the standard `EnergyLearningStrategy`, which typically submits two
+    separate price bids for inflexible (P_min) and flexible (P_max - P_min) components. Instead,
+    `EnergyLearningSingleBidStrategy` submits a single bid that always offers the unit's maximum power,
+    effectively treating the full capacity as inflexible from a bidding perspective.
+
+    The core reinforcement learning mechanics, including the observation structure, actor network
+    architecture, and reward formulation, remain consistent with the two-bid `EnergyLearningStrategy`. However,
+    this strategy modifies the action space to produce only a single bid price, and omits the
+    decomposition of capacity into flexible and inflexible parts.
+
+    Attributes
+    ----------
+    Inherits all attributes from EnergyLearningStrategy, with the exception of:
+    - act_dim : int
+        Reduced to 1 to reflect single bid pricing.
+    - foresight : int
+        Set to 24 to match typical storage strategy setups.
+
+    """
+
+    def __init__(self, *args, **kwargs):
+        # we select 24 to be in line with the storage strategies
+        foresight = kwargs.pop("foresight", 24)
+        act_dim = kwargs.pop("act_dim", 1)
+        unique_obs_dim = kwargs.pop("unique_obs_dim", 2)
+        super().__init__(
+            foresight=foresight,
+            act_dim=act_dim,
+            unique_obs_dim=unique_obs_dim,
+            *args,
+            **kwargs,
+        )
+
+    def calculate_bids(
+        self,
+        unit: SupportsMinMax,
+        market_config: MarketConfig,
+        product_tuples: list[Product],
+        **kwargs,
+    ) -> Orderbook:
+        """
+        Generates a single price bid for the full available capacity (max_power).
+
+        The method observes market and unit state, derives an action (bid price) from
+        the actor network, and constructs one bid covering the entire capacity, without
+        distinguishing between flexible and inflexible components.
+
+        Returns
+        -------
+        Orderbook
+            A list containing one bid with start/end time, full volume, and calculated price.
+        """
+
+        start = product_tuples[0][0]
+        end = product_tuples[0][1]
+        # get technical bounds for the unit output from the unit
+        #_, max_power = unit.calculate_min_max_power(start, end)
+        opt_schedule = unit.opt_power_requirement
+        bid_volume = opt_schedule[0]
+
+        # =============================================================================
+        # 1. Get the Observations, which are the basis of the action decision
+        # =============================================================================
+        next_observation = self.create_observation(
+            unit=unit,
+            market_id=market_config.market_id,
+            start=start,
+            end=end,
+        )
+
+        # =============================================================================
+        # 2. Get the Actions, based on the observations
+        # =============================================================================
+        actions, noise = self.get_actions(next_observation)
+
+        # =============================================================================
+        # 3. Transform Actions into bids
+        # =============================================================================
+        # actions are in the range [-1,1] + noise, we need to transform them into actual bids
+        # we can use our domain knowledge to guide the bid formulation
+        bid_price = actions[0] * self.max_bid_price
+
+        # actually formulate bids in orderbook format
+        bids = [
+            {
+                "start_time": start,
+                "end_time": end,
+                "only_hours": None,
+                "price": bid_price,
+                "volume": bid_volume,
+                "node": unit.node,
+            },
+        ]
+
+        if self.learning_mode:
+            self.learning_role.add_actions_to_cache(self.unit_id, start, actions, noise)
+
+        return bids
+
+    def calculate_reward(
+        self,
+        unit,
+        marketconfig: MarketConfig,
+        orderbook: Orderbook,
+    ):
+        """
+        Calculates the reward for the unit based on profits, costs, and opportunity costs from market transactions.
+
+        Args
+        ----
+        unit : SupportsMinMax
+            The unit for which to calculate the reward.
+        marketconfig : MarketConfig
+            Market configuration settings.
+        orderbook : Orderbook
+            Orderbook containing executed bids and details.
+
+        Notes
+        -----
+        The reward is computed by combining the following:
+        **Profit**: Income from accepted bids minus marginal and start-up costs.
+        **Opportunity Cost**: Penalty for underutilizing capacity, calculated as potential lost income.
+        **Regret Term**: A scaled regret term penalizes high opportunity costs to guide effective bidding.
+
+        The reward is scaled and stored along with other outputs in the unit’s data to support learning.
+        """
+        # Function is called after the market is cleared, and we get the market feedback,
+        # allowing us to calculate profit based on the realized transactions.
+
+        product_type = marketconfig.product_type
+
+        start = orderbook[0]["start_time"]
+        end = orderbook[0]["end_time"]
+        # end includes the end of the last product, to get the last products' start time we deduct the frequency once
+        end_excl = end - unit.index.freq
+
+        # Depending on how the unit calculates marginal costs, retrieve cost values.
+        marginal_cost = unit.calculate_marginal_cost(
+            start, unit.outputs[product_type].at[start]
+        )
+        market_clearing_price = orderbook[0]["accepted_price"]
+
+        duration = (end - start) / timedelta(hours=1)
+
+        income = 0.0
+        operational_cost = 0.0
+
+        accepted_volume_total = 0
+        offered_volume_total = 0
+
+        # Iterate over all orders in the orderbook to calculate order-specific profit.
+        for order in orderbook:
+            accepted_volume = order.get("accepted_volume", 0)
+            accepted_volume_total += accepted_volume
+
+            offered_volume_total += order["volume"]
+
+            # Calculate profit as income minus operational cost for this event.
+            order_income = market_clearing_price * accepted_volume * duration
+            order_cost = marginal_cost * accepted_volume * duration
+
+            # Accumulate income and operational cost for all orders.
+            income += order_income
+            operational_cost += order_cost
+
+        profit = income - operational_cost
+
+        # Stabilizing learning: Limit positive profit to 10% of its absolute value.
+        # This reduces variance in rewards and avoids extreme profit-seeking behavior.
+        # However, this does NOT prevent the agent from exploiting market inefficiencies if they exist.
+        # This leads to the agent learning to bid close to marginal costs to ensure acceptance,
+        # while still being able to capitalize on any market inefficiencies that may arise.
+        # However this will lead the learning agents to converge to the market price they should bid from below marginal costs.
+        # We only advise using this if profits can spike extremely high due to market conditions, or many learning units enter tactic collusion.
+        # IMPORTANT: This is a clear case of reward_tuning to stabilize learning - Use with caution!
+        # profit_scale= 0.1
+
+        profit_scale = 1
+        profit = min(profit, profit_scale * abs(profit))
+
+        # Opportunity cost: The income lost due to not operating at full capacity.
+        opportunity_cost = (
+            (market_clearing_price - marginal_cost)
+            * (unit.max_power - accepted_volume_total)
+            * duration
+        )
+
+        # If opportunity cost is negative, no income was lost, so we set it to zero.
+        opportunity_cost = max(opportunity_cost, 0)
+
+        # Dynamic regret scaling:
+        # - If accepted volume is positive, apply lower regret (0.1) to avoid punishment for being on the edge of the merit order.
+        # - If no dispatch happens, apply higher regret (0.5) to discourage idle behavior, if it could have been profitable.
+        regret_scale = 0.1 if accepted_volume_total > unit.min_power else 0.5
+
+        # --------------------
+        # 4.1 Calculate Reward
+        # Instead of directly setting reward = profit, we incorporate a regret term (opportunity cost penalty).
+        # This guides the agent toward strategies that maximize accepted bids while minimizing lost opportunities.
+
+        # scaling factor to normalize the reward to the range [-1,1]
+        scaling = 1 / (self.max_bid_price * unit.max_power)
+        regret = regret_scale * opportunity_cost
+        reward = scaling * (profit - regret)
+
+        # Store results in unit outputs
+        # Note: these are not learning-specific results but stored for all units for analysis
+        unit.outputs["profit"].loc[start:end_excl] += profit
+        unit.outputs["total_costs"].loc[start:end_excl] += operational_cost
+
+        # write rl-rewards to buffer
+        if self.learning_mode:
+            self.learning_role.add_reward_to_cache(
+                unit.id, start, reward, regret, profit
+            )
