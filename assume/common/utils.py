@@ -1053,3 +1053,48 @@ def create_pwlm(base_eff=1, fit_params_nom=None, fit_params_den=None, pwlm_break
     'create MILP formulation'
     MILP_model = model.reformulate_as_MILP('mc')  # in this case a convex combination is used'
     return MILP_model
+
+def plot_fastseries(
+    *series: FastSeries,
+    unit: str = "kW",
+    title: str = "FastSeries Debug Plot",
+):
+    """Display one or multiple FastSeries without saving files."""
+    import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+
+    if not series:
+        raise ValueError("Provide at least one FastSeries.")
+
+    fig, ax = plt.subplots(figsize=(11, 4))
+    years = set()
+
+    for i, s in enumerate(series):
+        if not isinstance(s, FastSeries):
+            raise TypeError(f"Argument {i + 1} is not a FastSeries.")
+
+        dates = pd.date_range(
+            start=s.index.start,
+            periods=len(s.data),
+            freq=pd.Timedelta(s.index.freq),
+        )
+        years.update(dates.year.unique())
+        ax.plot(dates, s.data, label=s.name or f"Series {i + 1}")
+
+    locator = mdates.AutoDateLocator()
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+
+    ax.set_title(f"{title} ({', '.join(map(str, sorted(years)))})")
+    ax.set_xlabel("Time")
+    ax.set_ylabel(unit)
+    ax.grid(True, alpha=0.3)
+
+    if len(series) > 1:
+        ax.legend()
+
+    fig.tight_layout()
+    plt.show(block=False)
+    return fig

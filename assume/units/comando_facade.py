@@ -1,7 +1,7 @@
 from assume.common.fast_pandas import FastSeries
 from assume.units.comando_components import comando_dst
-from assume.common.temp_gurobi_visulize import interactive_timeseries_plot
-from assume.common.gurobi_diagnoser import optimize_and_diagnose
+from assume.common.temp_archive.temp_gurobi_visulize import interactive_timeseries_plot
+from assume.common.temp_archive.gurobi_diagnoser import optimize_and_diagnose
 # temperary plot function for gurobi model results
 
 # import pickle

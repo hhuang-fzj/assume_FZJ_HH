@@ -6,9 +6,11 @@
 import logging
 import os
 from dotenv import load_dotenv
+import builtins
 
 from assume import World
 from assume.scenario.loader_csv import load_scenario_folder, run_learning
+from assume.common.utils import plot_fastseries
 
 log = logging.getLogger(__name__)
 
@@ -135,6 +137,7 @@ if __name__ == "__main__":
     - local_db: without database and grafana
     - timescale: with database and grafana (note: you need docker installed)
     """
+    builtins.plot_fastseries = plot_fastseries
     load_dotenv()#read the .env in the work directory
     # select to store the simulation results in a local database or in timescale
     # when using timescale, you need to have docker installed and can access the grafana dashboard

@@ -47,7 +47,6 @@ from assume.strategies import (
     deprecated_bidding_strategies,
 )
 from assume.units import BaseUnit, demand_side_technologies, unit_types
-from assume.common.pycharm_debug import install_pycharm_tracing_task_factory
 
 file_handler = logging.FileHandler(filename="assume.log", mode="w+")
 stdout_handler = logging.StreamHandler(stream=sys.stdout)
