@@ -8,6 +8,9 @@ eom:
   time_step: 15min
   save_frequency_hours: 24
 
+  bidding_strategy_params:
+    rl_foresight: 96
+
   learning_config:
     learning_mode: true
     continue_learning: false
