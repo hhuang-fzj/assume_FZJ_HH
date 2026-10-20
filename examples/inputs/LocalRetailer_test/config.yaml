@@ -1,7 +1,7 @@
 local_retailer_demo:
   start_date: 2016-06-19 00:00
   end_date: 2016-06-27 00:00
-  time_step: 1h
+  time_step: 15min
   save_frequency_hours: 48
   markets_config:
     LEM_DA:
@@ -9,17 +9,17 @@ local_retailer_demo:
       product_type: energy
       start_date: 2016-06-19 00:00
       products: &id001
-      - duration: 1h
-        count: 24
+      - duration: 15min
+        count: 96
         first_delivery: 24h
       opening_frequency: 24h
       opening_duration: 15min
       volume_unit: MWh
       maximum_bid_volume: 100000
       maximum_bid_price: 288.0
-      minimum_bid_price: -500
+      minimum_bid_price: 123.1
       price_unit: EUR/MWh
-      market_mechanism: pay_as_clear
+      market_mechanism: pay_as_clear_prorata
     WM_DA:
       operator: WM_operator
       product_type: energy

@@ -51,7 +51,11 @@ REBAP_FILES = "rebap_*.xls"
 REBAP_EUR_MWH = 120.0  # placeholder, only used when no reBAP file is found
 
 # Resolution of the simulation. Must match RESOLUTION in simbench_to_assume.py.
-RESOLUTION = "1h"
+RESOLUTION = "15min"
+# ASSUME order volumes and the realised values are power in MW over one time step.
+# Energy per time step: E [MWh] = P [MW] * STEP_HOURS (b22d8b5 used 1 h, where both are
+# equal; at 15 min they differ by a factor of 4).
+STEP_HOURS = pd.Timedelta(RESOLUTION) / pd.Timedelta(hours=1)
 
 SETTLEMENT_FILE = SCENARIO_PATH / "settlement.csv"
 
@@ -86,7 +90,11 @@ def read_portfolio_orders(output_path: Path) -> pd.DataFrame:
     # A market can receive no orders at all (alpha = 0 or alpha = 1). Its columns are
     # then missing for those time steps, so they are filled with zero instead of NaN.
     # Negating a zero volume gives -0.0; adding 0.0 turns it into a plain 0.0
-    return pd.DataFrame(result).fillna(0.0).sort_index() + 0.0
+    orders = pd.DataFrame(result).fillna(0.0).sort_index() + 0.0
+    # MW -> MWh per time step (prices stay in EUR/MWh)
+    for column in ("q_lem_bid", "q_lem_accepted", "q_wm_bid", "q_wm_accepted"):
+        orders[column] = orders[column] * STEP_HOURS
+    return orders
 
 
 def read_portfolio_units(scenario_path: Path) -> tuple[list[str], list[str]]:
@@ -122,8 +130,8 @@ def build_realised_residual_load(
         building_units (list[str]): Ids of the building units of the aggregator.
 
     Returns:
-        pd.Series: Realised residual load in MW per time step. A positive value is a
-        procurement need, a negative value is a surplus.
+        pd.Series: Realised residual load in MWh per time step (MW x STEP_HOURS). A
+        positive value is a procurement need, a negative value is a surplus.
     """
     actuals = pd.read_csv(
         scenario_path / "actuals_df.csv", parse_dates=["datetime"], index_col="datetime"
@@ -134,7 +142,7 @@ def build_realised_residual_load(
         residual_load += actuals[f"demand_actual_{unit}"]
     for unit in building_units:
         residual_load += actuals[f"load_actual_{unit}"] - actuals[f"pv_actual_{unit}"]
-    return residual_load
+    return residual_load * STEP_HOURS  # MW -> MWh per time step
 
 
 def read_rebap_file(path: Path) -> pd.Series:

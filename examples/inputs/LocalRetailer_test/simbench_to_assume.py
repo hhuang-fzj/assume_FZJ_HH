@@ -43,14 +43,40 @@ SCENARIO_PATH = Path(__file__).parent
 
 SIMULATION_START = "2016-06-19 00:00"  # SimBench profiles cover the year 2016
 SIMULATION_END = "2016-06-27 00:00"
-RESOLUTION = "1h"
+# 15-minute resolution everywhere (decision of the thesis, 15.10.2026). SimBench profiles
+# are 15 min ([SimBenchFmt] slide 3); since 1 Oct 2025 the day-ahead market (SDAC) uses
+# 15-minute products; the 2016 hourly prices are held constant within the hour [OWN].
+RESOLUTION = "15min"
 
-# PV systems above this rated power are community plants, not rooftop systems (MW)
-COMMUNITY_PV_THRESHOLD_MW = 0.05
+# PV systems above this rated power are not household rooftop systems but plants that
+# market their power directly; here they are the community PV plants on the LEM (MW).
+#   Threshold 100 kW: Paragraph 37 Abs. 2 Nr. 2 EEG 2014 (version in force until
+#   31.12.2016): the feed-in tariff is only paid to plants commissioned after
+#   31.12.2015 with an installed capacity of at most 100 kW [OK, consolidated text
+#   buzer.de]; larger plants must market their power directly. For plants commissioned
+#   before 2016 the limit was 500 kW (Nr. 1). SimBench gives no commissioning year:
+#   all plants are treated as commissioned in 2016 [OWN assumption].
+#   b22d8b5 used 0.05 MW without a source. In this grid both values give the same split:
+#   rooftop PV 6.5-13 kW (Bus 1, 4, 18, 19, 21), community PV 128.8 kW (Bus 41).
+COMMUNITY_PV_THRESHOLD_MW = 0.1
 
-# Number of pure demand nodes that belong to the aggregator portfolio. The remaining
-# demand nodes bid on the LEM on their own and are the aggregator's competitors.
-AGGREGATOR_DEMAND_NODES = 15
+# Rule that decides which nodes belong to the aggregator portfolio.
+#   "enwg_household" (default since 2026-10-19): the aggregator serves all household
+#       customers in the sense of Paragraph 3 Nr. 57 EnWG (as amended by BGBl. 2025 I
+#       Nr. 347): final customers who buy energy mainly for their own household
+#       consumption, or for their own professional, agricultural or commercial use with
+#       an annual consumption of at most 10 000 kWh. All other final customers bid on
+#       the LEM on their own (independent participants).
+#       Mapping to SimBench (own choice, no literature): one node = one final customer;
+#       a node is "commercial" if at least one of its load elements uses a SimBench
+#       profile starting with "G" (commercial) or "L" (agricultural); its annual
+#       consumption is the 2016 sum of its node load.
+#   "first15" (b22d8b5, kept for comparison only): the first AGGREGATOR_DEMAND_NODES
+#       pure demand nodes in string order. No physical or economic justification.
+PORTFOLIO_RULE = "enwg_household"
+HOUSEHOLD_LIMIT_MWH_PER_YEAR = 10.0  # 10 000 kWh, Paragraph 3 Nr. 57 EnWG
+COMMERCIAL_PROFILE_PREFIXES = ("G", "L")  # own mapping of SimBench profile names
+AGGREGATOR_DEMAND_NODES = 15  # only used by PORTFOLIO_RULE = "first15"
 
 # Opportunity cost of local sellers in EUR/MWh: a prosumer does not sell locally below
 # the feed-in tariff it would receive from the grid (assumption, source required)
@@ -207,21 +233,60 @@ def unit_id_of_node(node: str, prefix: str) -> str:
     return f"{prefix}_{node.split(' ', 1)[1].replace(' ', '')}"
 
 
+def annual_consumption_mwh(node_load: pd.DataFrame) -> pd.Series:
+    """
+    Annual consumption of every node in MWh.
+
+    Args:
+        node_load (pd.DataFrame): Load per node in MW from :func:`build_node_load`,
+            covering the whole year 2016.
+
+    Returns:
+        pd.Series: MWh per node (MW x length of one time step in hours).
+    """
+    step_h = (node_load.index[1] - node_load.index[0]) / pd.Timedelta(hours=1)
+    return node_load.sum() * step_h
+
+
+def commercial_nodes(load: pd.DataFrame) -> set[str]:
+    """
+    Nodes with at least one commercial or agricultural load element.
+
+    Args:
+        load (pd.DataFrame): SimBench ``Load`` table.
+
+    Returns:
+        set[str]: Node names whose load profile starts with one of
+        ``COMMERCIAL_PROFILE_PREFIXES`` (own mapping of SimBench profile names).
+    """
+    is_commercial = load["profile"].str.startswith(COMMERCIAL_PROFILE_PREFIXES)
+    return set(load.loc[is_commercial, "node"])
+
+
 def split_nodes(
-    node_load: pd.DataFrame, res: pd.DataFrame
+    node_load: pd.DataFrame, res: pd.DataFrame, load: pd.DataFrame | None = None
 ) -> tuple[list[str], list[str], list[str], pd.DataFrame]:
     """
     Split the nodes into the aggregator portfolio, independent participants and
     community PV plants.
 
-    The aggregator does not serve the whole district. It serves all prosumers and the
-    first ``AGGREGATOR_DEMAND_NODES`` pure demand nodes. The remaining demand nodes bid
-    on the LEM themselves and are the aggregator's competitors, following the market
-    setup of Haghifam et al. (2022), where the aggregator faces non-strategic rivals.
+    Prosumers are the nodes with a rooftop PV system (rated power up to
+    ``COMMUNITY_PV_THRESHOLD_MW``). A larger PV system is a community plant and acts as
+    the supply side of the LEM. Which of the remaining (pure demand) nodes belong to the
+    aggregator is decided by ``PORTFOLIO_RULE``:
+
+    - ``"enwg_household"``: household customers in the sense of Paragraph 3 Nr. 57 EnWG
+      (household use, or commercial/agricultural use with at most
+      ``HOUSEHOLD_LIMIT_MWH_PER_YEAR``) belong to the aggregator; the other nodes are
+      independent participants.
+    - ``"first15"``: rule of b22d8b5, the first ``AGGREGATOR_DEMAND_NODES`` pure demand
+      nodes in string order.
 
     Args:
-        node_load (pd.DataFrame): Load per node from :func:`build_node_load`.
+        node_load (pd.DataFrame): Load per node from :func:`build_node_load` (MW, 2016).
         res (pd.DataFrame): SimBench ``RES`` table.
+        load (pd.DataFrame | None): SimBench ``Load`` table, required for
+            ``"enwg_household"``.
 
     Returns:
         tuple[list[str], list[str], list[str], pd.DataFrame]: Prosumer nodes of the
@@ -235,8 +300,26 @@ def split_nodes(
     prosumer_nodes = sorted(n for n in node_load.columns if n in rooftop_nodes)
     demand_nodes = sorted(n for n in node_load.columns if n not in rooftop_nodes)
 
-    aggregator_demand = demand_nodes[:AGGREGATOR_DEMAND_NODES]
-    independent_demand = demand_nodes[AGGREGATOR_DEMAND_NODES:]
+    if PORTFOLIO_RULE == "first15":
+        aggregator_demand = demand_nodes[:AGGREGATOR_DEMAND_NODES]
+        independent_demand = demand_nodes[AGGREGATOR_DEMAND_NODES:]
+    elif PORTFOLIO_RULE == "enwg_household":
+        if load is None:
+            raise ValueError("PORTFOLIO_RULE 'enwg_household' needs the Load table")
+        energy = annual_consumption_mwh(node_load)
+        commercial = commercial_nodes(load)
+        is_household_customer = {
+            n: (n not in commercial) or (energy[n] <= HOUSEHOLD_LIMIT_MWH_PER_YEAR)
+            for n in node_load.columns
+        }
+        # a prosumer above the limit would not be a household customer; check it
+        too_large = [n for n in prosumer_nodes if not is_household_customer[n]]
+        if too_large:
+            raise ValueError(f"prosumer nodes above the household limit: {too_large}")
+        aggregator_demand = [n for n in demand_nodes if is_household_customer[n]]
+        independent_demand = [n for n in demand_nodes if not is_household_customer[n]]
+    else:
+        raise ValueError(f"unknown PORTFOLIO_RULE {PORTFOLIO_RULE}")
     return prosumer_nodes, aggregator_demand, independent_demand, community_pv
 
 
@@ -314,8 +397,13 @@ def write_unit_tables(
         SCENARIO_PATH / "residential_dsm_units.csv", index=False
     )
 
-    # 3. Community PV as the supply side of the LEM. Its bid price is the feed-in
-    #    tariff, the opportunity cost of selling to the grid instead of the LEM.
+    # 3. Community PV as the supply side of the LEM (128.8 kW > 100 kW, so no feed-in
+    #    tariff, direct marketing under Paragraph 37 Abs. 2 EEG 2014). It bids at the
+    #    lower bound of the LEM price corridor: the LEM cannot clear below this bound
+    #    (market rule, corridor [Lezama2021] p. 4 Eq. (2c), [Zepter2019] p. 166), and
+    #    every price at or above it exceeds every 2016 wholesale price the plant could
+    #    get otherwise (2016 maximum 104.96 EUR/MWh, [SMARD]), so bidding at the bound
+    #    is a price-taking bid [OWN reasoning].
     plant_rows = [
         {
             "name": unit_id_of_node(row.node, "CommunityPV"),
@@ -460,7 +548,9 @@ def read_wm_price(index: pd.DatetimeIndex) -> pd.Series:
     prices = pd.Series(
         raw[WM_PRICE_COLUMN].to_numpy(), index=to_simulation_time(local_time)
     )
-    prices = prices.resample(RESOLUTION).mean().reindex(index)
+    # hourly 2016 prices -> simulation resolution: hold the hourly value for every step
+    # of the hour (b22d8b5 used resample().mean(), which gives NaN when upsampling)
+    prices = prices.sort_index().reindex(index, method="ffill")
     if prices.isna().any():
         raise ValueError(
             f"{WM_PRICE_FILE.name} does not cover all simulation time steps"
@@ -591,7 +681,14 @@ def write_config() -> None:
         "operator": "market_operator",
         "product_type": "energy",
         "start_date": SIMULATION_START,
-        "products": [{"duration": "1h", "count": 24, "first_delivery": "24h"}],
+        # one product per time step of the next day (96 quarter hours at 15 min)
+        "products": [
+            {
+                "duration": RESOLUTION,
+                "count": int(pd.Timedelta("24h") / pd.Timedelta(RESOLUTION)),
+                "first_delivery": "24h",
+            }
+        ],
         "opening_frequency": "24h",
         "opening_duration": "15min",
         "volume_unit": "MWh",
@@ -606,6 +703,15 @@ def write_config() -> None:
     # into the technical maximum of the market whenever local supply is scarce. The cap
     # is the retail price: nobody buys locally above what its supplier charges.
     lem_market["maximum_bid_price"] = RETAIL_PRICE_EUR_MWH
+    # Lower bound of the LEM price corridor: no seller sells locally below the feed-in
+    # tariff ([Lezama2021] p. 4 Eq. (2c); [Zepter2019] p. 166). b22d8b5 kept -500.
+    lem_market["minimum_bid_price"] = FEED_IN_TARIFF_EUR_MWH
+    # Equal prices are common in the LEM (aggregator and community PV both sell at the
+    # lower bound). ASSUME's pay_as_clear breaks such ties at random, so results are not
+    # reproducible. pay_as_clear_prorata shares a rationed price level proportionally,
+    # by analogy to the SDAC curtailment rule: SDAC (2023), p. 3 [OK]; applying it to
+    # every rationed price level is a modelling choice [OWN].
+    lem_market["market_mechanism"] = "pay_as_clear_prorata"
 
     config = {
         STUDY_CASE: {
@@ -636,7 +742,7 @@ def main() -> None:
     # 3. Split the nodes between the aggregator, independent participants and the LEM
     #    supply side
     prosumer_nodes, aggregator_demand, independent_demand, community_pv = split_nodes(
-        node_load, tables["RES"]
+        node_load, tables["RES"], tables["Load"]
     )
     logger.info(
         f"aggregator: {len(prosumer_nodes)} prosumers and "

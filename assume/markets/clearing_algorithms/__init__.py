@@ -9,9 +9,11 @@ from .contracts import PayAsBidContractRole
 from .simple import PayAsBidRole, PayAsClearRole
 from .complex_clearing import ComplexClearingRole
 from .complex_clearing_dmas import ComplexDmasClearingRole
+from .pay_as_clear_prorata import PayAsClearProRataRole
 
 clearing_mechanisms: dict[str, MarketRole] = {
     "pay_as_clear": PayAsClearRole,
+    "pay_as_clear_prorata": PayAsClearProRataRole,
     "pay_as_bid": PayAsBidRole,
     "pay_as_bid_contract": PayAsBidContractRole,
     "complex_clearing": ComplexClearingRole,

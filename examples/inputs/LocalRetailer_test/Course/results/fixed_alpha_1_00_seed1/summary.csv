@@ -1,0 +1,2 @@
+run,seed,q_lem_bid,q_lem_accepted,q_wm_accepted,imbalance,cost_lem,cost_wm,cost_imbalance,cost_total
+fixed_alpha_1_00_seed1,1,0.573875,-0.21487,0.0,0.788745,-26.450514,0.0,25.176468,-1.274046

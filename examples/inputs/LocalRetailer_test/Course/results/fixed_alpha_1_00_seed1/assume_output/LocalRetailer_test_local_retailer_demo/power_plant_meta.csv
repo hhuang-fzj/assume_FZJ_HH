@@ -1,0 +1,3 @@
+,cold_start_cost,efficiency,emission_factor,fuel_type,hot_start_cost,max_heat_extraction,max_power,min_power,node,simulation,technology,unit_operator,warm_start_cost
+CommunityPV_Bus41,0,1,0,renewable,0,0,0.1288,0,node0,LocalRetailer_test_local_retailer_demo,solar,LEC_operator,0
+WholesaleSupply,0,1,0,wholesale,0,0,100,0,node0,LocalRetailer_test_local_retailer_demo,wholesale_supply,Grid_operator,0

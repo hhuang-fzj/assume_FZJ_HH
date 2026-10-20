@@ -1,0 +1,2 @@
+run,seed,q_lem_bid,q_lem_accepted,q_wm_accepted,imbalance,cost_lem,cost_wm,cost_imbalance,cost_total,expected_cost_total
+optimised_option1_seed1,1,-0.319735,-0.266011,0.89361,-0.053724,-32.745927,26.043177,-1.399275,-8.102025,-13.316195
