@@ -86,7 +86,7 @@ class DSMFlex:
 
         super().__init__(**kwargs)
 
-        self.components = components
+        self.components = copy.deepcopy(components)
         self.solver = SolverFactory(get_supported_solver_pyomo())
 
         # Rolling-horizon settings (populated from config; default is full horizon)

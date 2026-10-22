@@ -10,13 +10,14 @@ eom:
 
   bidding_strategy_params:
     rl_foresight: 96
+    unique_obs_dim : 0
 
   learning_config:
     learning_mode: true
     continue_learning: false
     trained_policies_save_path: null
     trained_policies_load_path: null
-    max_bid_price: 100
+    max_bid_price: 3000
     algorithm: matd3
     learning_rate: 0.001
     training_episodes: 100

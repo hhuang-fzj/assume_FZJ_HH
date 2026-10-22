@@ -1478,7 +1478,7 @@ class BuildingEnergyLearningSingleBidStrategy(TorchLearningStrategy, MinMaxStrat
             abs(float(unit.opt_power_requirement.at[t]))
             for t in unit.index
         )
-        regret_scale = 0.5
+        regret_scale = 1 #ToDo: For simplicity, take another look at the necessity of usage.
         for order in orderbook:
             start = order["start_time"]
             end = order["end_time"]
@@ -1504,7 +1504,7 @@ class BuildingEnergyLearningSingleBidStrategy(TorchLearningStrategy, MinMaxStrat
 
             #positive rejected_volume value indicates partial acceptance of a selling bid,
             # while a negative value indicates partial acceptance of a buying bid.
-            rejected_volume = accepted_volume - offered_volume
+            rejected_volume = offered_volume -accepted_volume
 
             marginal_income_lost = market_clearing_price - marginal_cost
 
@@ -1525,7 +1525,7 @@ class BuildingEnergyLearningSingleBidStrategy(TorchLearningStrategy, MinMaxStrat
             # If opportunity cost is negative, demand is not fullfilled, so it is punished.
             #opportunity_cost = max(opportunity_cost, 0)
             opportunity_cost = (marginal_income_lost * rejected_volume * duration) if rejected_volume > 0 \
-                else ( marginal_income_lost * rejected_volume * shorted_buy_penalty * duration)
+                else ((marginal_income_lost + shorted_buy_penalty) * rejected_volume * duration)
 
             # --------------------
             # Calculate Reward
