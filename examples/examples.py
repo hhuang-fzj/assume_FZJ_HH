@@ -80,6 +80,10 @@ available_examples = {
         "scenario": "dsm_building_rl",
         "study_case": "eom",
     },
+    "rh_small_household_rl": {
+        "scenario": "rh_dsm_building_rl",
+        "study_case": "eom",
+    },
     #
     # DRL references case for learning advancement testing
     "small_learning_1": {"scenario": "example_02a", "study_case": "base"},

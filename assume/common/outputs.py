@@ -240,6 +240,7 @@ class WriteOutput(Role):
             "unit_dispatch",
             "rl_params",
             "rl_grad_params",
+            "dsm_meta",
         ]:
             # these can be processed as a single dataframe
             self.write_buffers[content_type].extend(content_data)
@@ -485,6 +486,9 @@ class WriteOutput(Role):
                         df = self.convert_rl_grad_params(data_list)
                     case "rl_meta":
                         df = pd.DataFrame(data_list)
+                    case "dsm_meta":
+                        df = pd.DataFrame(data_list)
+                        df["simulation"] = self.simulation_id
                     case "grid_flows":
                         dfs = []
                         for data in data_list:

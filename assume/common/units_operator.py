@@ -31,6 +31,7 @@ from assume.strategies import (
     UnitsOperatorDirectStrategy,
 )
 from assume.units import BaseUnit
+from assume.units.dsm_load_shift import DSMFlex
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,8 @@ class UnitsOperator(Role):
         # valid_orders per product_type
         self.valid_orders = defaultdict(list)
         self.units: dict[str, BaseUnit] = {}
+        # Operators are recreated for each simulation/episode by the scenario loader.
+        self._stored_dsm_components: set[tuple[str, str]] = set()
 
     def setup(self):
         super().setup()
@@ -138,6 +141,20 @@ class UnitsOperator(Role):
                     content=message,
                     receiver_addr=db_addr,
                 )
+                if isinstance(unit, DSMFlex):
+                    for component in unit.as_component_dicts():
+                        key = (unit.id, component["component"])
+                        if key in self._stored_dsm_components:
+                            continue
+                        await self.context.send_message(
+                            content={
+                                "context": "write_results",
+                                "type": "dsm_meta",
+                                "data": [component],
+                            },
+                            receiver_addr=db_addr,
+                        )
+                        self._stored_dsm_components.add(key)
 
     def add_unit(
         self,

@@ -87,6 +87,28 @@ class DSMFlex:
         super().__init__(**kwargs)
 
         self.components = copy.deepcopy(components)
+        # Keep configured scalars before setup replaces dictionaries with instances
+        # and rolling-horizon solves carry forward different initial states.
+        self._component_metadata = []
+        for component, config in components.items():
+            self._component_metadata.append(
+                {
+                    **{
+                        key: value
+                        for key, value in config.items()
+                        if value is None or isinstance(value, (str, bool, int, float))
+                    },
+                    "component": component,
+                    "technology": next(
+                        (
+                            tech
+                            for tech in demand_side_technologies
+                            if component.startswith(tech)
+                        ),
+                        component,
+                    ),
+                }
+            )
         self.solver = SolverFactory(get_supported_solver_pyomo())
 
         # Rolling-horizon settings (populated from config; default is full horizon)
@@ -1775,6 +1797,17 @@ class DSMFlex:
         if power > epsilon:
             marginal_cost = abs(self.variable_cost_series.at[start] / power)
         return marginal_cost
+
+    def as_component_dicts(self) -> list[dict]:
+        """Configured scalar metadata for components owned by this DSM unit."""
+        return [
+            {
+                **metadata,
+                "parent_unit": self.id,
+                "unit_operator": self.unit_operator,
+            }
+            for metadata in self._component_metadata
+        ]
 
     def as_dict(self) -> dict:
         """
