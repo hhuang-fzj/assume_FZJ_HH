@@ -76,7 +76,6 @@ COMMUNITY_PV_THRESHOLD_MW = 0.1
 PORTFOLIO_RULE = "enwg_household"
 HOUSEHOLD_LIMIT_MWH_PER_YEAR = 10.0  # 10 000 kWh, Paragraph 3 Nr. 57 EnWG
 COMMERCIAL_PROFILE_PREFIXES = ("G", "L")  # own mapping of SimBench profile names
-AGGREGATOR_DEMAND_NODES = 15  # only used by PORTFOLIO_RULE = "first15"
 
 # Opportunity cost of local sellers in EUR/MWh: a prosumer does not sell locally below
 # the feed-in tariff it would receive from the grid (assumption, source required)
@@ -691,7 +690,7 @@ def write_config() -> None:
         ],
         "opening_frequency": "24h",
         "opening_duration": "15min",
-        "volume_unit": "MWh",
+        "volume_unit": "MW",  # ASSUME order volume = power (market_objects.py, MarketConfig.volume_unit)
         "maximum_bid_volume": 100000,
         "maximum_bid_price": 3000,
         "minimum_bid_price": -500,

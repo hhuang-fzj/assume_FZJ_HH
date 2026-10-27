@@ -28,7 +28,10 @@ Sources (full citations: reference list in the course document)
         imbalance price [EBGL] Art. 17(1), [BK6-13-104] [OK]; value 1 EUR/MWh [OWN].
     S_hat: option 1 (default) full acceptance, [Iria2019] p. 1363 [OK].
         Option 2 (switch S_HAT_FROM_FEEDBACK): learn from own clearing results,
-        principle [Kuehnbach2022] p. 7 [OK]; concrete rule [OWN, proposed by Claude]:
+        principle [Kuehnbach2022] Sect. 2.3: participants only learn whether their bids
+        were accepted (step 5, p. 7) and adapt to prior market results (step 3,
+        p. 6-7) [OK]; there it is the bid price that is learned, here the volume;
+        concrete rule [OWN, proposed by Claude]:
         LEM took only part of the offer in the same quarter hour of the previous
         delivery day -> S_hat = accepted volume; otherwise S_hat = |L_hat|.
         Reason for |L_hat| after full acceptance: full acceptance only shows that the

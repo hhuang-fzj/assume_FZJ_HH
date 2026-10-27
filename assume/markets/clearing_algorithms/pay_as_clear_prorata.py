@@ -102,19 +102,19 @@ class PayAsClearProRataRole(PayAsClearRole):
 
         for _, product_orders in groupby(all_orders, product_key):
             product_orders = list(product_orders)
-            clear_price = next(
+            clear_price = next(  
                 (o["accepted_price"] for o in product_orders if "accepted_price" in o),
                 0.0,
-            )
-            for is_demand in (True, False):
+            )  #Get the clearing price of this product. All accepted orders of the product share this price
+            for is_demand in (True, False): #Treat demand orders and supply orders separately
                 side = [o for o in product_orders if (o["volume"] < 0) == is_demand]
-                side.sort(key=itemgetter("price"))
+                side.sort(key=itemgetter("price")) #Sort the orders by price and group orders with the same price into one price level
                 for _, level in groupby(side, itemgetter("price")):
                     level = list(level)
-                    if len(level) > 1 and is_rationed(level):
-                        share_level_pro_rata(level)
+                    if len(level) > 1 and is_rationed(level): #Act only if the level holds more than one order and is only partly accepted (is_rationed)
+                        share_level_pro_rata(level)  #Share the accepted volume of the level among its orders in proportion to their bid volumes
                         for order in level:
-                            order["accepted_price"] = clear_price
+                            order["accepted_price"] = clear_price #Set the clearing price on all orders of the level
 
         # Orders may have moved between accepted and rejected
         accepted = [o for o in all_orders if abs(o["accepted_volume"]) > 0]

@@ -1,0 +1,5 @@
+name,technology,bidding_LEM_DA,bidding_WM_DA,max_power_charge,max_power_discharge,efficiency_charge,efficiency_discharge,min_soc,max_soc,initial_soc,capacity,additional_cost_charge,additional_cost_discharge,natural_inflow,unit_operator
+Battery_Bus14,battery,storage_two_market,storage_two_market,0.0137,0.0137,0.95,0.95,0.1,0.9,0.5,0.0274,0.0,0.0,0.0,battery_operator_1
+Battery_Bus37,battery,storage_two_market,storage_two_market,0.1181,0.1181,0.95,0.95,0.1,0.9,0.5,0.2362,0.0,0.0,0.0,battery_operator_2
+Battery_Bus34,battery,storage_two_market,storage_two_market,0.0068,0.0068,0.95,0.95,0.1,0.9,0.5,0.0137,0.0,0.0,0.0,battery_operator_3
+Battery_Bus38,battery,storage_two_market,storage_two_market,0.0866,0.0866,0.95,0.95,0.1,0.9,0.5,0.1731,0.0,0.0,0.0,battery_operator_4

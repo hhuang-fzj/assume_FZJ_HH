@@ -14,7 +14,7 @@ local_retailer_demo:
         first_delivery: 24h
       opening_frequency: 24h
       opening_duration: 15min
-      volume_unit: MWh
+      volume_unit: MW
       maximum_bid_volume: 100000
       maximum_bid_price: 288.0
       minimum_bid_price: 123.1
@@ -27,7 +27,7 @@ local_retailer_demo:
       products: *id001
       opening_frequency: 24h
       opening_duration: 15min
-      volume_unit: MWh
+      volume_unit: MW
       maximum_bid_volume: 100000
       maximum_bid_price: 3000
       minimum_bid_price: -500
@@ -40,7 +40,7 @@ local_retailer_demo:
       products: *id001
       opening_frequency: 24h
       opening_duration: 15min
-      volume_unit: MWh
+      volume_unit: MW
       maximum_bid_volume: 100000
       maximum_bid_price: 3000
       minimum_bid_price: -500
