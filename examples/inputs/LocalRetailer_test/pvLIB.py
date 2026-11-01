@@ -38,7 +38,7 @@ mc.run_model_from_poa(weather)
  
 # 6. Convert to the 0-1 capacity factor required by ASSUME
 cf = (mc.results.ac / 8100).clip(lower=0)
-cf.index = cf.index.tz_convert("Etc/GMT-1").tz_localize(None)
+cf.index = cf.index.tz_convert("UTC").tz_localize(None)  # simulation time = UTC
  
 cf.index = cf.index.floor("h")   # align to full hours
  

@@ -170,7 +170,7 @@ def read_rebap_file(path: Path) -> pd.Series:
     start = pd.DatetimeIndex(
         pd.to_datetime([row[0].strip() for row in data], format="%d.%m.%Y  %H:%M")
     )
-    # The file is in German local time, the simulation in standard time
+    # The file is in German local time, the simulation in UTC
     return pd.Series(
         [float(row[3]) for row in data], index=to_simulation_time(start), name="rebap"
     )

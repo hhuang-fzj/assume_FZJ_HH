@@ -41,8 +41,14 @@ logger = logging.getLogger(__name__)
 SIMBENCH_PATH = Path(__file__).parent / "simbench_raw"
 SCENARIO_PATH = Path(__file__).parent
 
-SIMULATION_START = "2016-06-19 00:00"  # SimBench profiles cover the year 2016
-SIMULATION_END = "2016-06-27 00:00"
+# All time stamps of the scenario are in UTC (naive, without time zone information).
+# ASSUME itself works in UTC: timestamp2datetime() and datetime2timestamp() in
+# assume/common/utils.py convert with timezone.utc and calendar.timegm. Every input
+# series (SimBench, SMARD, reBAP) is converted from German local time to UTC by
+# to_simulation_time(). Days of the simulation are UTC days (00:00-24:00 UTC, i.e.
+# 02:00-02:00 German summer time) [OWN].
+SIMULATION_START = "2016-06-19 00:00"  # UTC; SimBench profiles cover the year 2016
+SIMULATION_END = "2016-06-27 00:00"  # UTC
 # 15-minute resolution everywhere (decision of the thesis, 15.10.2026). SimBench profiles
 # are 15 min ([SimBenchFmt] slide 3); since 1 Oct 2025 the day-ahead market (SDAC) uses
 # 15-minute products; the 2016 hourly prices are held constant within the hour [OWN].
@@ -60,22 +66,22 @@ RESOLUTION = "15min"
 #   rooftop PV 6.5-13 kW (Bus 1, 4, 18, 19, 21), community PV 128.8 kW (Bus 41).
 COMMUNITY_PV_THRESHOLD_MW = 0.1
 
-# Rule that decides which nodes belong to the aggregator portfolio.
-#   "enwg_household" (default since 2026-10-19): the aggregator serves all household
-#       customers in the sense of Paragraph 3 Nr. 57 EnWG (as amended by BGBl. 2025 I
-#       Nr. 347): final customers who buy energy mainly for their own household
-#       consumption, or for their own professional, agricultural or commercial use with
-#       an annual consumption of at most 10 000 kWh. All other final customers bid on
-#       the LEM on their own (independent participants).
-#       Mapping to SimBench (own choice, no literature): one node = one final customer;
-#       a node is "commercial" if at least one of its load elements uses a SimBench
-#       profile starting with "G" (commercial) or "L" (agricultural); its annual
-#       consumption is the 2016 sum of its node load.
-#   "first15" (b22d8b5, kept for comparison only): the first AGGREGATOR_DEMAND_NODES
-#       pure demand nodes in string order. No physical or economic justification.
-PORTFOLIO_RULE = "enwg_household"
+# Which nodes belong to the aggregator portfolio is read from the SimBench profile names.
+#   SimBench marks every load element as household or commercial customer: "The
+#   consumer profiles consist of five household based time series (H0-A to H0-L) and
+#   22 RLM based series. The latter are sorted by matching SLP type (G0- to L2-)"
+#   (Spalthoff et al. 2019, Sect. 3.2). One node = one final customer [OWN]. A node
+#   with a G or L profile is a commercial customer and bids on the LEM on its own
+#   (independent participant); every other node is a household customer of the
+#   aggregator. In this grid no node mixes H0 and G profiles.
+#   Check with Paragraph 3 Nr. 57 EnWG (household customer = household use, or
+#   commercial use of at most 10 000 kWh per year): a commercial node at or below the
+#   limit would be a household customer; split_nodes() stops with an error in that
+#   case. In this grid the smallest commercial node uses 11.76 MWh (Bus 44, 2016).
+#   b22d8b5 used the first 15 pure demand nodes in string order (no justification);
+#   that rule was removed on 2026-10-29.
 HOUSEHOLD_LIMIT_MWH_PER_YEAR = 10.0  # 10 000 kWh, Paragraph 3 Nr. 57 EnWG
-COMMERCIAL_PROFILE_PREFIXES = ("G", "L")  # own mapping of SimBench profile names
+COMMERCIAL_PROFILE_PREFIXES = ("G", "L")  # SimBench: commercial (G) and agricultural (L)
 
 # Opportunity cost of local sellers in EUR/MWh: a prosumer does not sell locally below
 # the feed-in tariff it would receive from the grid (assumption, source required)
@@ -165,6 +171,11 @@ def load_simbench_tables(path: Path) -> dict[str, pd.DataFrame]:
     for name in ["LoadProfile", "RESProfile", "StorageProfile"]:
         df = pd.read_csv(path / f"{name}.csv", sep=";")
         df["time"] = pd.to_datetime(df["time"], format="%d.%m.%Y %H:%M")
+        # The time column is German local time (27.03 has no 02:00-02:45, 30.10 has
+        # it twice), although Spalthoff et al. (2019, p. 6) write "Timestamps for data
+        # are in CET (UTC+1)". The labels are converted to UTC like the market data,
+        # so all series share one time axis.
+        df["time"] = to_simulation_time(pd.DatetimeIndex(df["time"]))
         tables[name] = df.set_index("time")
     return tables
 
@@ -263,7 +274,7 @@ def commercial_nodes(load: pd.DataFrame) -> set[str]:
 
 
 def split_nodes(
-    node_load: pd.DataFrame, res: pd.DataFrame, load: pd.DataFrame | None = None
+    node_load: pd.DataFrame, res: pd.DataFrame, load: pd.DataFrame
 ) -> tuple[list[str], list[str], list[str], pd.DataFrame]:
     """
     Split the nodes into the aggregator portfolio, independent participants and
@@ -271,26 +282,24 @@ def split_nodes(
 
     Prosumers are the nodes with a rooftop PV system (rated power up to
     ``COMMUNITY_PV_THRESHOLD_MW``). A larger PV system is a community plant and acts as
-    the supply side of the LEM. Which of the remaining (pure demand) nodes belong to the
-    aggregator is decided by ``PORTFOLIO_RULE``:
-
-    - ``"enwg_household"``: household customers in the sense of Paragraph 3 Nr. 57 EnWG
-      (household use, or commercial/agricultural use with at most
-      ``HOUSEHOLD_LIMIT_MWH_PER_YEAR``) belong to the aggregator; the other nodes are
-      independent participants.
-    - ``"first15"``: rule of b22d8b5, the first ``AGGREGATOR_DEMAND_NODES`` pure demand
-      nodes in string order.
+    the supply side of the LEM. A pure demand node with a commercial or agricultural
+    SimBench profile (``COMMERCIAL_PROFILE_PREFIXES``) is an independent participant;
+    every other pure demand node is a household customer of the aggregator.
 
     Args:
         node_load (pd.DataFrame): Load per node from :func:`build_node_load` (MW, 2016).
         res (pd.DataFrame): SimBench ``RES`` table.
-        load (pd.DataFrame | None): SimBench ``Load`` table, required for
-            ``"enwg_household"``.
+        load (pd.DataFrame): SimBench ``Load`` table.
 
     Returns:
         tuple[list[str], list[str], list[str], pd.DataFrame]: Prosumer nodes of the
         aggregator, pure demand nodes of the aggregator, independent demand nodes and
         the rows of ``res`` that are treated as community PV plants.
+
+    Raises:
+        ValueError: If a commercial node uses at most ``HOUSEHOLD_LIMIT_MWH_PER_YEAR``
+            (it would be a household customer under Paragraph 3 Nr. 57 EnWG) or if a
+            prosumer node is commercial.
     """
     pv = res[res["type"] == "PV"]
     community_pv = pv[pv.pRES > COMMUNITY_PV_THRESHOLD_MW]
@@ -299,26 +308,17 @@ def split_nodes(
     prosumer_nodes = sorted(n for n in node_load.columns if n in rooftop_nodes)
     demand_nodes = sorted(n for n in node_load.columns if n not in rooftop_nodes)
 
-    if PORTFOLIO_RULE == "first15":
-        aggregator_demand = demand_nodes[:AGGREGATOR_DEMAND_NODES]
-        independent_demand = demand_nodes[AGGREGATOR_DEMAND_NODES:]
-    elif PORTFOLIO_RULE == "enwg_household":
-        if load is None:
-            raise ValueError("PORTFOLIO_RULE 'enwg_household' needs the Load table")
-        energy = annual_consumption_mwh(node_load)
-        commercial = commercial_nodes(load)
-        is_household_customer = {
-            n: (n not in commercial) or (energy[n] <= HOUSEHOLD_LIMIT_MWH_PER_YEAR)
-            for n in node_load.columns
-        }
-        # a prosumer above the limit would not be a household customer; check it
-        too_large = [n for n in prosumer_nodes if not is_household_customer[n]]
-        if too_large:
-            raise ValueError(f"prosumer nodes above the household limit: {too_large}")
-        aggregator_demand = [n for n in demand_nodes if is_household_customer[n]]
-        independent_demand = [n for n in demand_nodes if not is_household_customer[n]]
-    else:
-        raise ValueError(f"unknown PORTFOLIO_RULE {PORTFOLIO_RULE}")
+    commercial = commercial_nodes(load)
+    energy = annual_consumption_mwh(node_load)
+    small = [n for n in commercial if energy[n] <= HOUSEHOLD_LIMIT_MWH_PER_YEAR]
+    if small:
+        raise ValueError(f"commercial nodes at or below the household limit: {small}")
+    commercial_prosumers = [n for n in prosumer_nodes if n in commercial]
+    if commercial_prosumers:
+        raise ValueError(f"prosumer nodes with a commercial profile: {commercial_prosumers}")
+
+    aggregator_demand = [n for n in demand_nodes if n not in commercial]
+    independent_demand = [n for n in demand_nodes if n in commercial]
     return prosumer_nodes, aggregator_demand, independent_demand, community_pv
 
 
@@ -364,6 +364,15 @@ def write_unit_tables(
             else "",
             "max_power": round(node_load[node].max(), 6),
             "min_power": 0,
+            # Bid price of demand_energy_naive (demand.py: unit.price). Independent
+            # participants bid the upper LEM limit, so the bid lies within the market
+            # limits (rule of the thesis, supervisor 2026-10-30); before, the ASSUME
+            # default 3000 was clipped to 288 by base_market.py, lines 374-383. The
+            # demand units of the aggregator keep the ASSUME default; their own bids are
+            # not used, because the aggregator bids for the whole portfolio.
+            "price": INDEPENDENT_DEMAND_PRICE_EUR_MWH
+            if operator == OPERATOR_INDEPENDENT
+            else AGGREGATOR_BUY_PRICE_EUR_MWH,
             "unit_operator": operator,
         }
 
@@ -490,26 +499,26 @@ def write_unit_tables(
 
 def to_simulation_time(local_time: pd.DatetimeIndex) -> pd.DatetimeIndex:
     """
-    Convert German local time with daylight saving time to the time basis of SimBench.
+    Convert German local time with daylight saving time to UTC.
 
     Args:
         local_time (pd.DatetimeIndex): Time stamps in German local time, including the
             missing hour in March and the repeated hour in October.
 
     Returns:
-        pd.DatetimeIndex: Time stamps in central European standard time (UTC+1)
-        without time zone information.
+        pd.DatetimeIndex: Time stamps in UTC without time zone information.
 
     Note:
-        SimBench provides 35 136 quarter hours for 2016, i.e. 366 days without a
-        daylight saving shift, so its profiles do not follow German local time. It is
-        assumed here that they are given in standard time (UTC+1). Market data from
-        SMARD and netztransparenz is published in local time and is shifted by one hour
-        in summer by this conversion.
+        The simulation runs in UTC, the time base of ASSUME (see SIMULATION_START).
+        The time column of the SimBench CSV files is written in German local time
+        (27.03.2016 has no 02:00-02:45, 30.10.2016 has it twice), and so is the market
+        data from SMARD and netztransparenz. All of them are converted with this
+        function: local winter time minus one hour, local summer time minus two hours
+        (e.g. 14:00 German summer time = 12:00 UTC).
     """
     return (
         local_time.tz_localize("Europe/Berlin", ambiguous="infer")
-        .tz_convert("Etc/GMT-1")
+        .tz_convert("UTC")
         .tz_localize(None)
     )
 

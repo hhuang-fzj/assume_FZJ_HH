@@ -76,7 +76,7 @@ Sources:
         Forecasting 30(4), 1030-1081, Sect. 3.8.1, p. 1049-1050.
     Mean over the delivery day, fixed share BETA: [OWN] (decisions E4, D1).
     Hand calculation and learning script: course document WP13,
-        examples/inputs/LocalRetailer_test/course/wp13_battery_bid.py.
+        examples/inputs/LocalRetailer_test/Course/wp13_battery_bid.py.
 """
 
 from datetime import timedelta
@@ -96,6 +96,45 @@ BETA = 0.5
 # WM price limits (config.yaml): orders at these prices are always accepted
 WM_SELL_PRICE = -500.0
 WM_BUY_PRICE = 3000.0
+
+
+def replay_soc(unit: SupportsMinMaxCharge, until) -> float:
+    """
+    SOC that ASSUME will have at ``until``, from initial_soc and all committed volumes.
+
+    Repeats execute_current_dispatch() of storage.py (lines 277-340) for every time step
+    before ``until``: power limits, the dead band between min_power_charge and
+    min_power_discharge, the SOC limits (calculate_soc_max_charge / _discharge, lines
+    369-409) and the SOC update. It uses outputs["energy"]: the accepted volumes as
+    set_dispatch_plan() stored them (base.py from line 121 and 629-680), which ASSUME
+    executes with the same rule. So the result equals the SOC ASSUME reaches.
+
+    Args:
+        unit (SupportsMinMaxCharge): The battery (assume/units/storage.py, Storage).
+        until (datetime): First time step of the delivery day.
+
+    Returns:
+        float: State of charge (0-1) at ``until``.
+    """
+    hours = unit.index.freq / timedelta(hours=1)
+    soc = unit.initial_soc
+    for t in unit.index[unit.index[0] : until]:
+        if t >= until:
+            break
+        power = unit.outputs["energy"].at[t]
+        if power > unit.max_power_discharge:
+            power = unit.max_power_discharge
+        elif power < unit.max_power_charge:
+            power = unit.max_power_charge
+        elif unit.min_power_discharge > power > unit.min_power_charge and power != 0:
+            power = 0
+        if power > 0:
+            power = min(power, unit.calculate_soc_max_discharge(soc))
+            soc += -(power * hours / unit.efficiency_discharge) / unit.capacity
+        elif power < 0:
+            power = max(power, unit.calculate_soc_max_charge(soc))
+            soc += -(power * hours * unit.efficiency_charge) / unit.capacity
+    return soc
 
 
 class StorageTwoMarketStrategy(StorageEnergyHeuristicFlexableStrategy):
@@ -133,10 +172,21 @@ class StorageTwoMarketStrategy(StorageEnergyHeuristicFlexableStrategy):
         reference_price = float(np.mean([forecast[p[0]] for p in product_tuples]))
 
         start = product_tuples[0][0]
-        # SOC at the start of the day: initial_soc of storage_units.csv on day 1,
-        # afterwards the SOC that ASSUME computed from the accepted volumes
-        # (storage.py, line 177 and execute_current_dispatch, lines 277-340)
-        theoretic_soc = unit.outputs["soc"].at[start]
+        # SOC at the start of the delivery day. Not unit.outputs["soc"].at[start]:
+        # ASSUME updates the stored SOC when volumes are accepted
+        # (SupportsMinMaxCharge.set_dispatch_plan, base.py 629-680), but only from the
+        # first to the last order of that acceptance; quarter hours outside that window
+        # keep an old value (initially initial_soc, storage.py line 177). replay_soc()
+        # applies ASSUME's dispatch rule to all volumes committed before the day.
+        theoretic_soc = replay_soc(unit, start)
+        # Write this SOC into every quarter hour of the delivery day. set_dispatch_plan
+        # starts its SOC update at the first accepted order of the day and reads the
+        # stored SOC there; without this it may read an old value and cut accepted
+        # volume that the battery can deliver (found in the WP15 runs, 2026-10-26).
+        # The SOC within the day is recomputed by set_dispatch_plan and
+        # execute_current_dispatch (storage.py 277-340) [OWN workaround].
+        for product in product_tuples:
+            unit.outputs["soc"].at[product[0]] = theoretic_soc
         # Power of the last period before the day (assume/common/base.py, line 229)
         previous_power = unit.get_output_before(start)
 

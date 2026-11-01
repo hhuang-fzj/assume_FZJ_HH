@@ -97,7 +97,7 @@ from simbench_to_assume import (  # noqa: E402
 
 # Week of the experiment. June because reBAP files exist only for 01, 04, 06 / 2016.
 #   [OWN] choice of the week; data availability: [reBAP]
-WEEK_START = "2016-06-20 00:00"  # Monday
+WEEK_START = "2016-06-20 00:00"  # Monday, UTC
 WEEK_END = "2016-06-27 00:00"  # exclusive
 
 # 15-minute resolution, E = P * DT_H.
@@ -137,7 +137,7 @@ OUTPUT_FILE = Path(__file__).resolve().parent / f"wp5_inputs_{WEEK_START[:10]}.c
 
 
 def build_time_index() -> pd.DatetimeIndex:
-    """Quarter hours of the week in simulation time (standard time UTC+1, no DST)."""
+    """Quarter hours of the week in simulation time (UTC)."""
     return pd.date_range(WEEK_START, WEEK_END, freq=RESOLUTION, inclusive="left")
 
 
@@ -146,7 +146,7 @@ def build_portfolio_residual_load(index: pd.DatetimeIndex) -> pd.Series:
     Net residual load of the aggregator portfolio in MWh per quarter hour.
 
     Portfolio = prosumers + aggregator demand nodes, as split by split_nodes() in
-    simbench_to_assume.py with PORTFOLIO_RULE = "enwg_household".
+    simbench_to_assume.py (SimBench profile names, checked with Paragraph 3 Nr. 57 EnWG).
 
     Sources:
       Data: [SimBench] grid LV4.101, files simbench_raw/ (Load, LoadProfile, RES,
@@ -157,9 +157,10 @@ def build_portfolio_residual_load(index: pd.DatetimeIndex) -> pd.Series:
       Aggregator = household customers, Paragraph 3 Nr. 57 EnWG (BGBl. 2025 I Nr. 347):
         household use, or own commercial/agricultural use up to 10 000 kWh per year
         [OK, checked 2026-10-13]. Decision of the thesis (user).
-        Mapping to SimBench: one node = one final customer; node is commercial if a
-        load profile starts with "G" or "L"; annual consumption = 2016 node load
-        [OWN]. Implemented in split_nodes() of simbench_to_assume.py.
+        Mapping to SimBench: one node = one final customer [OWN]; node is commercial
+        if a load profile starts with "G" or "L" (SimBench household series H0-A to
+        H0-L, commercial series G0- to L2-, Spalthoff et al. 2019, Sect. 3.2).
+        Implemented in split_nodes() of simbench_to_assume.py.
     """
     tables = load_simbench_tables(SIMBENCH_PATH)
     node_load = build_node_load(tables["Load"], tables["LoadProfile"], RESOLUTION)  # MW
@@ -188,13 +189,12 @@ def read_wm_price_15min(index: pd.DatetimeIndex) -> pd.Series:  #2016 年 SMARD 
       Data: [SMARD], column "DE/AT/LU" (one bidding zone until 30.09.2018).
       2016 day-ahead products were hourly; holding the hourly value for the four
         quarter hours is [OWN] (decision of 15.10.2026: WM also with 15-min products).
-      Time conversion German local time -> UTC+1 without DST: to_simulation_time()
-        of b22d8b5. Assumption that SimBench uses UTC+1: [OWN, TODO] - the SimBench
-        format slides do not state the time zone ([SimBenchFmt] slide 23).
+      Time conversion German local time -> UTC: to_simulation_time() of
+        simbench_to_assume.py (the simulation runs in UTC, the time base of ASSUME).
     """
     raw = pd.read_csv(WM_PRICE_FILE, sep=";", decimal=",", na_values="-")
     local_time = pd.DatetimeIndex(pd.to_datetime(raw["Datum von"], format="%d.%m.%Y %H:%M"))
-    hourly = pd.Series(raw[WM_PRICE_COLUMN].to_numpy(), index=to_simulation_time(local_time)) #德国当地时间 → UTC+1 标准时间。夏天会往前移 1 小时：当地 13:00 = 仿真 12:00。原因：SimBench 每天都是 96 个 15 min，没有夏令时
+    hourly = pd.Series(raw[WM_PRICE_COLUMN].to_numpy(), index=to_simulation_time(local_time))  # German local time -> UTC; in summer local 14:00 = simulation 12:00
     price = hourly.sort_index().reindex(index, method="ffill")  # hold the hourly value 15 min 时间戳在小时表里找不到时，取前面最近的小时值。所以 12:15、12:30、12:45 都用 12:00 的价
     if price.isna().any():
         raise ValueError("SMARD file does not cover the whole week")

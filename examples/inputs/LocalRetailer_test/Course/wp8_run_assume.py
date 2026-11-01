@@ -43,7 +43,7 @@ from assume.strategies.aggregator_alpha_optimized import (  # noqa: E402
 STUDY_CASE = "local_retailer_demo"
 OPERATOR = "local_retailer"
 MARKETS = ("LEM_DA", "WM_DA")
-DELIVERY_START, DELIVERY_END = "2016-06-20 00:00", "2016-06-26 23:45"  # one week
+DELIVERY_START, DELIVERY_END = "2016-06-20 00:00", "2016-06-26 23:45"  # one week, UTC
 
 
 def run(alpha: float | None, s_hat_feedback: bool, seed: int = 1) -> Path:

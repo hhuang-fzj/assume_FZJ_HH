@@ -83,10 +83,13 @@ def check():
     from wp5_inputs import read_wm_price_15min  # SMARD prices of round 1
 
     index = pd.date_range("2016-06-13", "2016-06-22", freq="15min", inclusive="left")
-    p_wm_hat = naive_forecast(read_wm_price_15min(index), "2016-06-21")["2016-06-21 12:00"]
-    ok("p_wm_hat 12:00 (naive)", p_wm_hat, 25.24)
+    # 11:00 UTC = 13:00 German summer time (was 12:00 in UTC+1 before 2026-10-29)
+    p_wm_hat = naive_forecast(read_wm_price_15min(index), "2016-06-21")["2016-06-21 11:00"]
+    ok("p_wm_hat 11:00 UTC (naive)", p_wm_hat, 25.24)
 
-    L_hat = -0.0051243  # MWh, course/wp5_inputs_2016-06-20.csv, 2016-06-21 12:00
+    # Example value of WP14 (course/wp5_inputs_2016-06-20.csv before the SimBench time
+    # fix of 2026-10-27); kept as a fixed input so the hand calculation stays valid.
+    L_hat = -0.0051243  # MWh
     r_hat = r_hat_for(L_hat, p_wm_hat)
     ok("r_hat", r_hat, 24.24)
 

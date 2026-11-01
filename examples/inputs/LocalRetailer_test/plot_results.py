@@ -198,7 +198,7 @@ def plot_timeseries(path: Path, day: str, figure_file: Path) -> None:
         alpha=0.25,
         label="uncovered",
     )
-    ax.set_xlabel(f"hour of {day}")
+    ax.set_xlabel(f"hour of {day} (UTC)")
     ax.axhline(0, color="black", linewidth=0.8)
     ax.set_ylabel("energy (MWh), purchase > 0, sale < 0")
     ax.set_title(f"LEM bid and execution over one day (alpha = {EXAMPLE_ALPHA})")

@@ -144,7 +144,7 @@ def fig_one_day(settlements: dict) -> None:
             linestyle="--", **kwargs)
     ax.axhline(0, color=MUTED, linewidth=1)
     ax.set_ylabel("MWh per 15 min  (+ buy, − sell)")
-    ax.set_title(f"Optimised α (option 1), {DAY}: the LEM takes only part of the offer",
+    ax.set_title(f"Optimised α (option 1), {DAY} (UTC): the LEM takes only part of the offer",
                  loc="left", fontsize=10, color=INK)
     ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%H:%M"))
     ax.legend(frameon=False, fontsize=8, loc="lower left")

@@ -148,8 +148,8 @@ def main() -> None:
     forecasts["price_LEM_DA"] = naive_forecast(read_wm_price_hourly(), forecasts.index)
     forecasts.to_csv(FORECASTS_FILE)
     print(f"added column price_LEM_DA to {FORECASTS_FILE.name}")
-    print("check 2016-06-21 12:00:", forecasts.loc["2016-06-21 12:00", "price_LEM_DA"],
-          "(expected 25.24 = WM price of Monday 2016-06-20 12:00)")
+    print("check 2016-06-21 11:00 UTC:", forecasts.loc["2016-06-21 11:00", "price_LEM_DA"],
+          "(expected 25.24 = WM price of Monday 2016-06-20 11:00 UTC = 13:00 local)")
 
 
 if __name__ == "__main__":

@@ -164,12 +164,15 @@ def check():
     prices = read_wm_price_15min(index)
     forecast = naive_forecast(prices, "2016-06-21")
     reference = forecast.mean()
-    ok("1 reference price", reference, 26.928)
+    # UTC since 2026-10-29: mean SMARD price of the UTC day 2016-06-20 = local
+    # 20.06. 02:00 - 21.06. 01:00 (CEST) = 27.0017 (checked by hand from the SMARD file).
+    # Before (UTC+1): 26.928.
+    ok("1 reference price", reference, 27.0017)
 
     hourly = forecast.resample("1h").first()
     discharge = [t.hour for t, p in hourly.items() if p >= reference]
     print("2 discharge hours:", discharge)
-    print("  expected:       ", [5, 6, 7, 8, 10, 16, 17, 18, 19, 20, 21])
+    print("  expected:       ", [4, 5, 6, 7, 15, 16, 17, 18, 19, 20])  # UTC
 
     battery = read_batteries().iloc[0]  # battery 1, Bus 14
     soc0 = SOC_INIT_SHARE * battery.e_max_kwh
@@ -177,8 +180,8 @@ def check():
                            forecast["2016-06-21 00:00"], reference)
     v05, p05 = battery_bid(soc0, battery.p_max_kw, battery.e_max_kwh, battery.eta,
                            forecast["2016-06-21 05:00"], reference)
-    ok("3 charge price (ASSUME)", p00, 25.582)
-    ok("3 discharge price (ASSUME)", p05, 28.345)
+    ok("3 charge price (ASSUME)", p00, 25.6516)  # 27.0017 x 0.95
+    ok("3 discharge price (ASSUME)", p05, 28.4228)  # 27.0017 / 0.95
     ok("4 charge volume 00:00 [kW]", v00, 13.7)
     ok("4 SOC at 00:15 [kWh]", soc_after(soc0, v00, battery.eta), 16.954)
     ok("4 discharge volume 05:00 [kW]", v05, -13.7)

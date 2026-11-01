@@ -9,8 +9,12 @@ of the thesis):
     2. All WM bids are accepted (bids at the WM price limits).
     3. Volume that is not accepted in the LEM is settled as imbalance at the reBAP.
        (The intraday auction is added later, WP16.)
-    4. Dispatchable units (battery) only run with their accepted volume, so they
-       have no imbalance: realised = LEM accepted + WM accepted.
+    4. Dispatchable units (battery) only run with their accepted volume. If the
+       plan is feasible, realised = LEM accepted + WM accepted and D = 0. If an
+       earlier charge bid was not accepted, the state of charge can be too low for
+       a later accepted discharge; ASSUME then executes less than accepted and the
+       difference is imbalance D (found 2026-10-26, settlement_participants.py).
+       So for a battery, pass the executed volume as realised_kw, not A + W.
 
 Cost of one period (same formula as settle() of settlement.py, commit b22d8b5):
     C = p_LEM * A + p_WM * W + reBAP * D,   D = L - A - W
@@ -51,7 +55,8 @@ def participant_cost(
 
     Args:
         realised_kw (float): Realised net volume L in kW (buy +, sell -). For a
-            dispatchable unit (battery) pass lem_kw + wm_kw.
+            battery: the volume ASSUME executed (= lem_kw + wm_kw if the plan is
+            feasible, less if the state of charge was too low).
         lem_kw (float): Volume A accepted in the LEM in kW.
         wm_kw (float): Volume W accepted in the WM in kW (all WM bids are accepted).
         price_lem (float): LEM clearing price in EUR/MWh.
@@ -92,6 +97,11 @@ TESTS = [
      45, 45, -0.092105),
     # Battery not accepted: it does not run, realised = 0, no imbalance
     ("T6 battery, not accepted", 0, 0, 0, 0, 45, 45, 0.0),
+    # Battery discharge accepted 10 kW, but the earlier charge bid was not accepted:
+    # only 4 kW can be delivered, D = -4 - (-10) = 6 kW is bought at the reBAP
+    # (added 2026-10-30)
+    ("T7 battery discharge, SOC too low", -4, -10, 0, BATTERY_DISCHARGE_PRICE,
+     45, 45, -0.024605),
 ]
 
 

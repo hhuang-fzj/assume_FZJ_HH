@@ -103,6 +103,18 @@ bidding_strategies[
     "units_operator_energy_coordinated_local_retailer"
     ] = LocalRetailerCoordinatedStrategy
 
+# Round 2: battery on two parallel day-ahead markets (LEM_DA and WM_DA)
+from assume.strategies.storage_two_market import StorageTwoMarketStrategy
+
+bidding_strategies["storage_two_market"] = StorageTwoMarketStrategy
+
+# Round 2: independent demand nodes and community PV on LEM_DA and WM_DA with a
+# fixed share BETA (rule R8)
+from assume.strategies.fixed_share_two_market import FixedShareTwoMarketStrategy
+
+bidding_strategies["demand_two_market_fixed_share"] = FixedShareTwoMarketStrategy
+bidding_strategies["powerplant_two_market_fixed_share"] = FixedShareTwoMarketStrategy
+
 try:
     from assume.strategies.learning_strategies import (
         EnergyLearningStrategy,

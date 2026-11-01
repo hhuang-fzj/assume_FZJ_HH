@@ -281,13 +281,21 @@ class LocalRetailerCoordinatedStrategy(UnitOperatorStrategy):
         # -------------------------------------------------
         market_id = market_config.market_id
         price_cap = market_config.maximum_bid_price
+        price_floor = market_config.minimum_bid_price
 
         def capped(orderbook: Orderbook) -> Orderbook:
-            """Return copies of the orders with the price capped at the market maximum."""
+            """
+            Return copies of the orders with the price limited to the market limits.
+
+            Rule of the thesis: every participant bids only between the minimum and the
+            maximum price of the market (supervisor, 2026-10-30). Without the lower
+            limit, the sell price 0 was clipped to 123.1 by ASSUME
+            (base_market.py, lines 374-383) in the LEM of round 1.
+            """
             orders = []
             for order in orderbook:
                 order = order.copy()
-                order["price"] = min(order["price"], price_cap)
+                order["price"] = min(max(order["price"], price_floor), price_cap)
                 orders.append(order)
             return orders
  
