@@ -387,6 +387,35 @@ class CustomUnitForecaster(UnitForecaster):
             self.__setattr__(k, v)
 
 
+class EnergyHubForecaster(CustomUnitForecaster):
+    """Supply fuel prices and DSM demands as dictionaries of FastSeries.
+
+    Build the hub model after its market price forecast has been initialized.
+    """
+
+    def __init__(
+        self,
+        index: ForecastIndex,
+        fuel_prices: dict[str, ForecastSeries],
+        dsm_demands: dict[str, ForecastSeries],
+        **kwargs,
+    ):
+        super().__init__(index, **kwargs)
+        self.fuel_prices = self._dict_to_series(fuel_prices)
+        self.dsm_demands = self._dict_to_series(dsm_demands)
+
+    def initialize(
+        self,
+        units: list[BaseUnit],
+        market_configs: list[MarketConfig],
+        forecast_df: ForecastSeries = None,
+        initializing_unit: BaseUnit = None,
+    ):
+        super().initialize(units, market_configs, forecast_df, initializing_unit)
+        initializing_unit.electricity_price = self.price["LLEC"]
+        initializing_unit.setup_model()
+
+
 class DemandForecaster(UnitForecaster):
     """Forecaster for demand units.
 

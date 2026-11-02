@@ -24,6 +24,7 @@ from assume.common.forecaster import (
     CustomUnitForecaster,
     DemandForecaster,
     DsmUnitForecaster,
+    EnergyHubForecaster,
     ExchangeForecaster,
     HydrogenForecaster,
     PowerplantForecaster,
@@ -713,6 +714,36 @@ def load_config_and_create_forecaster(
         start=index[0], end=index[-1], freq=pd.infer_freq(index)
     )
     unit_forecasts: dict[str, UnitForecaster] = {}
+    if EVCharging_units is not None:
+        if charging_df is None:
+            raise ValueError("charging_df is required for EV charging units")
+        for id, charging in EVCharging_units.iterrows():
+            unit_forecasts[id] = CustomUnitForecaster(
+                index=shared_unit_index,
+                availability=availability.get(id, pd.Series(1.0, index, name=id)),
+                forecast_algorithms=get_unit_forecast_algorithms(
+                    forecast_algorithms, charging
+                ),
+                charging_virtual_battery=charging_df["Virtual_Battery [kWh]"],
+                charging_arrival_soc=charging_df["Arrival_SOC [kWh]"],
+                charging_departure_soc=charging_df["Departure_SOC [kWh]"],
+            )
+    if "energy_hub" in dsm_units:
+        dsm_demands = load_file(
+            path=path, config=config, file_name="dsm_demands", index=index
+        )
+        if dsm_demands is None:
+            raise ValueError("dsm_demands is required for energy hub units")
+        for id, hub in dsm_units["energy_hub"].iterrows():
+            unit_forecasts[id] = EnergyHubForecaster(
+                index=shared_unit_index,
+                availability=availability.get(id, pd.Series(1.0, index, name=id)),
+                forecast_algorithms=get_unit_forecast_algorithms(
+                    forecast_algorithms, hub
+                ),
+                fuel_prices=fuel_prices_df,
+                dsm_demands=dsm_demands,
+            )
     if powerplant_units is not None:
         for id, plant in powerplant_units.iterrows():
             unit_forecasts[id] = PowerplantForecaster(

@@ -62,9 +62,9 @@ class V2gChargingRB(SupportsMinMaxCharge):
         bid_end (datetime.datetime): End timestamp of the currently evaluated bid timestep.
 
     Forecaster inputs:
-        charging_Virtual_Battery [kWh]: Aggregated capacity of connected EVs.
-        charging_Arrival_SOC [kWh]: SOC added by arriving EVs.
-        charging_Departure_SOC [kWh]: Required SOC for departing EVs.
+        charging_virtual_battery: Aggregated capacity of connected EVs, in kWh.
+        charging_arrival_soc: SOC added by arriving EVs, in kWh.
+        charging_departure_soc: Required SOC for departing EVs, in kWh.
     """
 
     def __init__(
@@ -113,12 +113,11 @@ class V2gChargingRB(SupportsMinMaxCharge):
         )
 
         # EV schedule inputs are given in kWh and converted to MWh.
-        self.virtual_battery = forecaster['charging_Virtual_Battery [kWh]']/1000
-        self.arr_SOC = forecaster['charging_Arrival_SOC [kWh]']/1000
-        self.dep_SOC = forecaster['charging_Departure_SOC [kWh]']/1000
+        self.virtual_battery = forecaster.charging_virtual_battery / 1000
+        self.arr_SOC = forecaster.charging_arrival_soc / 1000
+        self.dep_SOC = forecaster.charging_departure_soc / 1000
 
-        self.max_soc = max(forecaster['charging_Virtual_Battery [kWh]']/1000)
-        self.virtual_battery = forecaster['charging_Virtual_Battery [kWh]']/1000
+        self.max_soc = max(self.virtual_battery)
         self.min_soc = min_soc
         if initial_soc is None:
             initial_soc = 0

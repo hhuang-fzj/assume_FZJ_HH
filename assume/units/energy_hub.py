@@ -8,7 +8,7 @@ import pyomo.environ as pyo
 import pandas as pd
 
 from assume.common.base import SupportsMinMax
-from assume.common.forecaster import UnitForecaster
+from assume.common.forecaster import EnergyHubForecaster
 from assume.units.comando_facade import ComandoFacade
 
 from comando.core import System
@@ -42,7 +42,7 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
         id: str,
         unit_operator: str,
         bidding_strategies: dict,
-        forecaster: UnitForecaster,
+        forecaster: EnergyHubForecaster,
         components: dict[str, dict] = None,
         technology: str = "energy_hub",
         objective: str = "min_variable_cost",
@@ -83,18 +83,16 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
                     f"Components {component} is not a valid component for the steel plant unit."
                 )
 
-        self.natural_gas_price = self.forecaster['fuel_price_natural gas']
-        self.electricity_price = self.forecaster['price_LLEC']
-        self.ht_heating_price = self.forecaster['fuel_price_HT_heat']
+        self.natural_gas_price = self.forecaster.fuel_prices['natural gas']
+        self.ht_heating_price = self.forecaster.fuel_prices['HT_heat']
         #self.cooling_price = self.forecaster['price_COOL']
         #self.co2_price = self.forecaster['price_CO2']#ToDo: add Emission price
-        self.cooling_demand = self.forecaster['dsm_Cooling Demand [MW]']
+        self.cooling_demand = self.forecaster.dsm_demands['Cooling Demand [MW]']
         #self.heating_demand = self.forecaster['dsm_Heating Demand [MW]']
 
         self.objective = objective
 
-        # Initialize the model
-        self.setup_model()
+        # EnergyHubForecaster builds the model after initializing market prices.
 
     def initialize_energy_system(self):
         comps = self.components.values()
@@ -155,6 +153,8 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
         params['Electricity_price'] = self.electricity_price.as_pd_series()
         params['Gas_price'] = self.natural_gas_price.as_pd_series()
         params['HtHeating_price'] = self.ht_heating_price.as_pd_series()
+        # COMANDO timesteps below use integer labels, not datetime labels.
+        params = {name: series.reset_index(drop=True) for name, series in params.items()}
 
         ts = list((index_pd_extent[1:] - index_pd_extent[:-1]).seconds / 3600)
         ts = {i: time_step for i, time_step in enumerate(ts)}

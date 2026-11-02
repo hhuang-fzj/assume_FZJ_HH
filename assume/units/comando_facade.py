@@ -12,6 +12,7 @@ class ComandoFacade:
     def __init__(self, components, **kwargs):
         super().__init__(**kwargs)
         self.components = components
+        self.horizon_mode = 'full_horizon'
         #self.demand = kwargs['demand']#ToDo: move this to energy hub, it is not general feature of a COMANDO Unit
 
     def initialize_components(self):
@@ -89,7 +90,7 @@ class ComandoFacade:
         dsm_demand_forecasts = self.get_dsm_forecasts()#ToDo: delete cooling demand in dsm Unit
         if self.id == 'WVVZ':
             for forecast_key, forecast_series in dsm_demand_forecasts.items():
-                energy_type = forecast_key.removeprefix("dsm_").split("Demand")[0].strip()
+                energy_type = forecast_key.split("Demand")[0].strip()
 
                 component_class = comando_dst["demand"]
                 component_instance = component_class(energy_type)
@@ -112,17 +113,8 @@ class ComandoFacade:
 
         #status = optimize_and_diagnose(self.opt_model)
     def get_dsm_forecasts(self) -> dict:
-        """
-        Return all DSM-related forecast time series from the forecaster.
-
-        DSM forecasts are identified by the prefix 'dsm_'.
-        The comparison is case-insensitive to avoid issues with capitalization.
-        """
-        return {
-            key: value
-            for key, value in self.forecaster.forecasts.items()
-            if key.lower().startswith("dsm_")
-        }
+        """Return DSM demand series keyed by their input column names."""
+        return self.forecaster.dsm_demands
     def determine_optimal_operation_without_flex(self):
         pass
     def determine_optimal_operation_with_flex(self):
@@ -141,7 +133,7 @@ class ComandoFacade:
         #temporary Gurobi evaluation
         if self.opt_model.SolCount > 0:
             # Plot timeseries of variables from gurobi result as the user choose
-            interactive_timeseries_plot(self.opt_model,self.index)
+            #interactive_timeseries_plot(self.opt_model,self.index)
             #raise SystemExit("Stopping simulation here")#Fixme: Only for review the result
             pass
         else:

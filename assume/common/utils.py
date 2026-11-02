@@ -975,8 +975,10 @@ def load_index_file(file_name: Path, index: pd.DatetimeIndex):
         logger.info(f"Downsampling {file_name} successful.")
 
     elif df.index.freq > index.freq or len(df.index) < len(index):
-        logger.warning("Upsampling not implemented yet. Returning None.")
-        return None
+        logger.warning(
+            f"Upsampling {file_name} from {df.index.freq} to {index.freq} using time interpolation."
+        )
+        df = df.resample(index.freq).interpolate(method="time")
 
     return df.loc[index]
 
