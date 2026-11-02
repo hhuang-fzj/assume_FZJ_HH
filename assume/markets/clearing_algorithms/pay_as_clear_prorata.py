@@ -11,16 +11,18 @@ order decides who is served, and the result depends on the order in which the bi
 reached the market. This role clears the market in the same way but shares the volume
 of a rationed price level proportionally among all orders at that level.
 
-The proportional sharing is adopted by analogy to the curtailment rule of the Single
-Day-Ahead Coupling (SDAC): when a bidding zone is curtailed, the curtailed volume is
-shared proportionally by all price-taking orders of that zone. SDAC states this rule
-for curtailment at the price limits; applying it to any rationed price level is a
-modelling choice of this role.
-
-Reference:
-    SDAC (2023): SDAC measures in cases of short supply: Curtailment management,
-    Second auction, and Peak Load Capacity in SDAC. January 2023, p. 3.
-    https://www.epexspot.com/sites/default/files/2025-02/sdac-publication-sdac-measures-in-cases-of-short-supply.pdf
+Sources (what each one supports):
+    Method: Kremer, I., Nyborg, K. G. (2004). Underpricing and market power in uniform
+        price auctions. The Review of Financial Studies 17(3), 849-877; working paper
+        version p. 5 and p. 12 ("pro-rata on the margin"): orders above the clearing
+        price are filled, orders exactly at the clearing price are filled pro rata.
+        There it is stated for the buyer side.
+    Power-exchange precedent, only at the price limits: SDAC (2023). SDAC measures in
+        cases of short supply: Curtailment management, Second auction, and Peak Load
+        Capacity in SDAC, p. 3: curtailed price-taking demand at the maximum price is
+        shared pro rata.
+        https://www.epexspot.com/sites/default/files/2025-02/sdac-publication-sdac-measures-in-cases-of-short-supply.pdf
+    Using the same rule on the seller side and at every rationed price level: [OWN].
 """
 
 from itertools import groupby

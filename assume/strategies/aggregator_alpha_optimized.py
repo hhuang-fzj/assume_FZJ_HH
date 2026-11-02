@@ -13,7 +13,7 @@ participants):
     p_wm    WM price forecast                           forecasts_df.csv, column price_WM_DA
     p_lem   LEM price forecast                          corridor bound (rule below)
     r_hat   expected imbalance price                    p_wm -/+ penalty
-    S_hat   expected LEM volume the LEM takes           |L_hat| (option 1) or own feedback
+    S_hat   expected LEM volume the LEM takes           |L_hat| (full acceptance) or own feedback
 
 Sources (full citations: reference list in the course document)
     WM price taker, bids at the price limits so that they are always accepted:
@@ -26,17 +26,18 @@ Sources (full citations: reference list in the course document)
         [Lezama2021] p. 12 [OK]; using the bound as forecast [OWN].
     r_hat = p_wm -/+ penalty: form [Ottesen2016] p. 830, 839 [OK]; no speculation on the
         imbalance price [EBGL] Art. 17(1), [BK6-13-104] [OK]; value 1 EUR/MWh [OWN].
-    S_hat: option 1 (default) full acceptance, [Iria2019] p. 1363 [OK].
-        Option 2 (switch S_HAT_FROM_FEEDBACK): learn from own clearing results,
+    S_hat, full acceptance (default): S_hat = |L_hat|, [Iria2019] p. 1363 [OK].
+    S_hat from feedback (switch S_HAT_FROM_FEEDBACK): learn from own clearing results,
         principle [Kuehnbach2022] Sect. 2.3: participants only learn whether their bids
         were accepted (step 5, p. 7) and adapt to prior market results (step 3,
-        p. 6-7) [OK]; there it is the bid price that is learned, here the volume;
-        concrete rule [OWN, proposed by Claude]:
-        LEM took only part of the offer in the same quarter hour of the previous
-        delivery day -> S_hat = accepted volume; otherwise S_hat = |L_hat|.
-        Reason for |L_hat| after full acceptance: full acceptance only shows that the
-        LEM could take at least the offered volume, so the aggregator tries the full
-        volume again (drawback: alternates between full and partial offers).
+        p. 6-7) [OK]; there it is the bid price that is learned, here the volume.
+        Concrete rule [OWN, decision of 2026-11-01; no literature found for a rule of
+        this kind]: mean accepted share of the same quarter hour over the last 7 days
+        with a LEM offer, times |L_hat| (_expected_lem_volume()). Share instead of
+        volume, because L_hat changes from day to day.
+        Replaces the rule of 2026-10-19 (only the previous day: S_hat = accepted volume
+        after partial acceptance, else |L_hat|), which alternated from day to day: a
+        day without a LEM offer gave no feedback, so the next day fell back to |L_hat|.
     Units: ASSUME order volumes are power in MW for the product duration; the model
         works in MWh, E = P * duration [OWN conversion]. ASSUME sign: demand (buy) < 0,
         supply (sell) > 0 (b22d8b5 aggregator.py, step 3).
@@ -64,7 +65,8 @@ class AlphaOptimizedLocalRetailerStrategy(LocalRetailerCoordinatedStrategy):
     WM_SELL_PRICE_EUR_MWH = -500.0  # WM price floor -> sell order always accepted
     WM_BUY_PRICE_EUR_MWH = 3000.0  # WM price cap -> buy order always accepted
     R_HAT_PENALTY_EUR_MWH = 1.0
-    S_HAT_FROM_FEEDBACK = False  # False = option 1, True = option 2
+    S_HAT_FROM_FEEDBACK = False  # False = full acceptance, True = from own feedback
+    S_HAT_WINDOW_DAYS = 7  # S_hat from feedback: mean over the last 7 days [OWN]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -101,17 +103,40 @@ class AlphaOptimizedLocalRetailerStrategy(LocalRetailerCoordinatedStrategy):
     # 2. Expected LEM volume S_hat
     # ------------------------------------------------------------------------------
     def _expected_lem_volume(self, L_hat: pd.Series) -> pd.Series:
-        """S_hat in MWh: option 1 = |L_hat|; option 2 = from own previous-day feedback."""
+        """
+        Expected LEM volume S_hat in MWh for every delivery period.
+
+        Full acceptance (S_HAT_FROM_FEEDBACK = False): S_hat = |L_hat|.
+
+        From feedback (S_HAT_FROM_FEEDBACK = True): for the same quarter hour on each of
+        the last S_HAT_WINDOW_DAYS days on which the aggregator offered volume in the
+        LEM, take the accepted share (accepted / offered); S_hat = mean share * |L_hat|.
+        Days without a LEM offer are skipped (they say nothing about the LEM). Without
+        any such day: |L_hat| (full acceptance).
+
+        All feedback used is known at the decision time: the LEM of day d - 1 cleared
+        one day before the decision for day d.
+
+        Args:
+            L_hat (pd.Series): Residual load forecast in MWh per delivery period.
+
+        Returns:
+            pd.Series: S_hat in MWh, same index as L_hat.
+        """
         S_hat = L_hat.abs()
         if not self.S_HAT_FROM_FEEDBACK:
             return S_hat
         for t in L_hat.index:
-            previous = self.lem_feedback.get(t - timedelta(days=1))
-            if previous is None:
-                continue  # no feedback yet -> full acceptance
-            offered, accepted = previous
-            if offered > 1e-12 and accepted < offered - 1e-12:
-                S_hat[t] = accepted  # LEM took only part: that is what it can take
+            shares = []
+            for days_back in range(1, self.S_HAT_WINDOW_DAYS + 1):
+                previous = self.lem_feedback.get(t - timedelta(days=days_back))
+                if previous is None:
+                    continue  # no LEM offer in this quarter hour on that day
+                offered, accepted = previous
+                if offered > 1e-12:
+                    shares.append(min(accepted / offered, 1.0))
+            if shares:
+                S_hat[t] = sum(shares) / len(shares) * abs(L_hat[t])
         return S_hat
 
     # ------------------------------------------------------------------------------
@@ -193,7 +218,7 @@ class AlphaOptimizedLocalRetailerStrategy(LocalRetailerCoordinatedStrategy):
         return wm_orderbook, lem_orderbook
 
     # ------------------------------------------------------------------------------
-    # 4. Feedback: store own LEM results (used only by option 2)
+    # 4. Feedback: store own LEM results (used only for S_hat from feedback)
     # ------------------------------------------------------------------------------
     def handle_market_feedback(
         self,

@@ -37,8 +37,8 @@ RUNS = {
     "fixed_alpha_0_00": "fixed α = 0 (all WM)",
     "fixed_alpha_0_50": "fixed α = 0.5",
     "fixed_alpha_1_00": "fixed α = 1 (all LEM)",
-    "optimised_option1": "optimised α, option 1",
-    "optimised_option2": "optimised α, option 2",
+    "optimised_s_hat_full": "optimised α, Ŝ = |L̂|",
+    "optimised_s_hat_feedback": "optimised α, Ŝ from feedback",
 }
 DAY = "2016-06-21"  # day shown in figure 3 (any day of the week works)
 
@@ -134,7 +134,7 @@ def fig_cost_components(table: pd.DataFrame) -> None:
 
 def fig_one_day(settlements: dict) -> None:
     """Figure 3: one day of the optimised run: residual load, LEM offer and acceptance."""
-    s = settlements[RUNS["optimised_option1"]].loc[DAY]
+    s = settlements[RUNS["optimised_s_hat_full"]].loc[DAY]
     fig, ax = plt.subplots(figsize=(7, 3.4))
     kwargs = {"where": "post", "linewidth": 2}
     ax.step(s.index, s.residual_load, color=MUTED, label="residual load L (realised)",
@@ -144,7 +144,7 @@ def fig_one_day(settlements: dict) -> None:
             linestyle="--", **kwargs)
     ax.axhline(0, color=MUTED, linewidth=1)
     ax.set_ylabel("MWh per 15 min  (+ buy, − sell)")
-    ax.set_title(f"Optimised α (option 1), {DAY} (UTC): the LEM takes only part of the offer",
+    ax.set_title(f"Optimised α (Ŝ = |L̂|), {DAY} (UTC): the LEM takes only part of the offer",
                  loc="left", fontsize=10, color=INK)
     ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%H:%M"))
     ax.legend(frameon=False, fontsize=8, loc="lower left")

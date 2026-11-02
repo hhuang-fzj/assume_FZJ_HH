@@ -130,8 +130,8 @@ INDEPENDENT_DEMAND_PRICE_EUR_MWH = RETAIL_PRICE_EUR_MWH
 # that unit equals the fuel price of the column WM_FUEL_TYPE in fuel_prices_df.csv, so a
 # time series of day-ahead prices can be used directly.
 #
-# TODO replace the flat price by the day-ahead prices of the German bidding zone in
-# 2016 (ENTSO-E transparency platform, Day-ahead Prices).
+# The day-ahead prices of 2016 are read from WM_PRICE_FILE (SMARD, below); the flat
+# price WM_PRICE_EUR_MWH is only a fallback when that file is missing.
 # ---------------------------------------------------------------------------
 WM_PRICE_EUR_MWH = 29.0  # fallback only, used when WM_PRICE_FILE does not exist
 # Hourly day-ahead prices 2016, exported from SMARD (Bundesnetzagentur):

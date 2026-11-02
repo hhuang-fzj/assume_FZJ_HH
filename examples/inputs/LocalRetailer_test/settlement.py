@@ -184,16 +184,15 @@ def read_rebap(index: pd.DatetimeIndex) -> pd.Series:
         index (pd.DatetimeIndex): Settlement periods.
 
     Returns:
-        pd.Series: reBAP in EUR/MWh per settlement period. Quarter-hourly values are
-        averaged to the simulation resolution.
+        pd.Series: reBAP in EUR/MWh per settlement period. The files are quarter-hourly
+        and the simulation resolution is 15 min, so resample() keeps the values.
 
     Raises:
         ValueError: If reBAP files exist but do not cover all settlement periods.
 
     Note:
-        Averaging to hourly values is a simplification: imbalances are settled per
-        quarter hour in Germany. It is exact only if the imbalance is constant within
-        the hour.
+        Imbalances are settled per quarter hour in Germany, the same resolution as the
+        simulation (RESOLUTION = "15min"), so no averaging takes place.
     """
     files = sorted(SCENARIO_PATH.glob(REBAP_FILES))
     if not files:

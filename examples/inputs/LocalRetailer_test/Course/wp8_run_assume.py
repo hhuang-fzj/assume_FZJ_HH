@@ -5,9 +5,9 @@ Before running: build the 15-minute scenario once with
     python examples/inputs/LocalRetailer_test/simbench_to_assume.py
 
 Run from the repository root (with .venv active):
-    python examples/inputs/LocalRetailer_test/course/wp8_run_assume.py                 # optimised alpha, option 1
-    python examples/inputs/LocalRetailer_test/course/wp8_run_assume.py --alpha 0.5     # fixed alpha (b22d8b5 strategy)
-    python examples/inputs/LocalRetailer_test/course/wp8_run_assume.py --s-hat-feedback  # optimised alpha, option 2
+    python examples/inputs/LocalRetailer_test/Course/wp8_run_assume.py                 # optimised alpha, S_hat = |L_hat|
+    python examples/inputs/LocalRetailer_test/Course/wp8_run_assume.py --alpha 0.5     # fixed alpha (b22d8b5 strategy)
+    python examples/inputs/LocalRetailer_test/Course/wp8_run_assume.py --s-hat-feedback  # optimised alpha, S_hat from feedback
 
 Results (three layers, kept apart) in course/results/<run>/:
     decisions.csv   optimiser layer: inputs, alpha, expected costs (only optimised runs)
@@ -55,7 +55,7 @@ def run(alpha: float | None, s_hat_feedback: bool, seed: int = 1) -> Path:
     # (clearing_algorithms/simple.py, sort key (price, random.random())).
     random.seed(seed)
     if alpha is None:
-        run_id = "optimised_option2" if s_hat_feedback else "optimised_option1"
+        run_id = "optimised_s_hat_feedback" if s_hat_feedback else "optimised_s_hat_full"
     else:
         run_id = f"fixed_alpha_{alpha:.2f}".replace(".", "_")
     run_id += f"_seed{seed}"
@@ -115,7 +115,7 @@ def main() -> None:
     parser.add_argument("--alpha", type=float, default=None,
                         help="fixed alpha (b22d8b5 strategy); omit for optimised alpha")
     parser.add_argument("--s-hat-feedback", action="store_true",
-                        help="option 2: S_hat from own LEM feedback")
+                        help="S_hat from own LEM feedback (mean of the last 7 days)")
     parser.add_argument("--seed", type=int, default=1,
                         help="random seed (safeguard only; pro-rata clearing is deterministic)")
     args = parser.parse_args()

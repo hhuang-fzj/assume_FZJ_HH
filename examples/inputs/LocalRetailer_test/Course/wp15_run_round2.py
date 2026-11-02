@@ -8,7 +8,7 @@ all participants.
 
 Run from the repository root (with .venv active):
     python examples/inputs/LocalRetailer_test/Course/wp15_run_round2.py
-    python examples/inputs/LocalRetailer_test/Course/wp15_run_round2.py --beta 0.5 --tie lem --s-hat 2
+    python examples/inputs/LocalRetailer_test/Course/wp15_run_round2.py --beta 0.5 --tie lem --s-hat feedback
     python examples/inputs/LocalRetailer_test/Course/wp15_run_round2.py --no-prepare
 
 Step 1 (skipped with --no-prepare) rebuilds the scenario folder for round 2:
@@ -23,8 +23,8 @@ Step 2 runs one ASSUME simulation per (beta, tie, s_hat) in its own Python proce
 World per process, as in wp8_run_assume.py):
     beta  -> BETA of storage_two_market.py and fixed_share_two_market.py (decision D1)
     tie   -> F5_TIE_BREAK of AlphaRound2LocalRetailerStrategy ("lem" or "wm")
-    s_hat -> S_HAT_FROM_FEEDBACK of the same class: 1 = option 1 (S_hat = |L_hat|),
-             2 = option 2 (S_hat from the own LEM result of the previous day)
+    s_hat -> S_HAT_FROM_FEEDBACK of the same class: "full" = S_hat = |L_hat|,
+             "feedback" = S_hat from the own LEM results of the last 7 days
 The aggregator (local_retailer) uses AlphaRound2LocalRetailerStrategy with F1-F3, F5.
 
 Results in Course/results/round2_beta_<b>_tie_<t>_shat_<s>/:
@@ -65,11 +65,11 @@ MARKETS = ("LEM_DA", "WM_DA")
 DELIVERY_START, DELIVERY_END = "2016-06-20 00:00", "2016-06-26 23:45"  # as wp8
 BETAS = (0.0, 0.5, 1.0)  # decision D1
 TIE_RULES = ("lem", "wm")  # decision F5
-S_HAT_OPTIONS = (1, 2)  # option 1 / option 2 of S_hat (model document, section 3.6)
+S_HAT_RULES = ("full", "feedback")  # S_hat rule (model document, section 3.6)
 RESULTS_PATH = COURSE_PATH / "results"
 
 
-def run_id(beta: float, tie: str, s_hat: int) -> str:
+def run_id(beta: float, tie: str, s_hat: str) -> str:
     return f"round2_beta_{beta:.2f}_tie_{tie}_shat_{s_hat}".replace(".", "_")
 
 
@@ -101,7 +101,7 @@ def check_scenario() -> None:
         raise RuntimeError("storage_units.csv missing; run without --no-prepare")
 
 
-def run_single(beta: float, tie: str, s_hat: int, seed: int = 1) -> Path:
+def run_single(beta: float, tie: str, s_hat: str, seed: int = 1) -> Path:
     """One simulation with settlement of all participants; returns the result folder."""
     import assume.strategies.fixed_share_two_market as fixed_share
     import assume.strategies.storage_two_market as storage
@@ -130,7 +130,7 @@ def run_single(beta: float, tie: str, s_hat: int, seed: int = 1) -> Path:
     )
     strategy = AlphaRound2LocalRetailerStrategy()
     strategy.F5_TIE_BREAK = tie
-    strategy.S_HAT_FROM_FEEDBACK = s_hat == 2
+    strategy.S_HAT_FROM_FEEDBACK = s_hat == "feedback"
     operator = world.unit_operators[OPERATOR]
     for market_id in MARKETS:  # one object for both markets, as in wp8_run_assume.py
         operator.portfolio_strategies[market_id] = strategy
@@ -186,7 +186,7 @@ def run_single(beta: float, tie: str, s_hat: int, seed: int = 1) -> Path:
         "run": run_id(beta, tie, s_hat),
         "beta": beta,
         "tie_rule": tie,
-        "s_hat_option": s_hat,
+        "s_hat_rule": s_hat,
         "agg_q_lem_accepted": settled.q_lem_accepted.sum(),
         "agg_q_wm_accepted": settled.q_wm_accepted.sum(),
         "agg_imbalance": settled.imbalance.sum(),
@@ -218,8 +218,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     parser.add_argument("--beta", type=float, nargs="*", default=list(BETAS))
     parser.add_argument("--tie", nargs="*", default=list(TIE_RULES), choices=TIE_RULES)
-    parser.add_argument("--s-hat", type=int, nargs="*", default=list(S_HAT_OPTIONS),
-                        choices=S_HAT_OPTIONS)
+    parser.add_argument("--s-hat", nargs="*", default=list(S_HAT_RULES),
+                        choices=S_HAT_RULES)
     parser.add_argument("--no-prepare", action="store_true",
                         help="use the scenario folder as it is")
     parser.add_argument("--single", action="store_true", help=argparse.SUPPRESS)
@@ -238,10 +238,10 @@ def main() -> None:
     for s_hat in args.s_hat:
         for beta in args.beta:
             for tie in args.tie:
-                print(f"--- run beta = {beta}, tie = {tie}, s_hat option {s_hat}")
+                print(f"--- run beta = {beta}, tie = {tie}, s_hat {s_hat}")
                 subprocess.run(
                     [sys.executable, __file__, "--single", "--no-prepare",
-                     "--beta", str(beta), "--tie", tie, "--s-hat", str(s_hat)],
+                     "--beta", str(beta), "--tie", tie, "--s-hat", s_hat],
                     check=True,
                 )
                 rows.append(
