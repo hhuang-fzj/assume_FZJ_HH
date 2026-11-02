@@ -241,6 +241,7 @@ class WriteOutput(Role):
             "rl_params",
             "rl_grad_params",
             "dsm_meta",
+            "dsm_schedule",
         ]:
             # these can be processed as a single dataframe
             self.write_buffers[content_type].extend(content_data)
@@ -488,6 +489,9 @@ class WriteOutput(Role):
                         df = pd.DataFrame(data_list)
                     case "dsm_meta":
                         df = pd.DataFrame(data_list)
+                        df["simulation"] = self.simulation_id
+                    case "dsm_schedule":
+                        df = pd.DataFrame(data_list).set_index("time")
                         df["simulation"] = self.simulation_id
                     case "grid_flows":
                         dfs = []

@@ -83,6 +83,7 @@ class UnitsOperator(Role):
         self.units: dict[str, BaseUnit] = {}
         # Operators are recreated for each simulation/episode by the scenario loader.
         self._stored_dsm_components: set[tuple[str, str]] = set()
+        self._stored_dsm_schedules: set[str] = set()
 
     def setup(self):
         super().setup()
@@ -155,6 +156,21 @@ class UnitsOperator(Role):
                             receiver_addr=db_addr,
                         )
                         self._stored_dsm_components.add(key)
+                    #Writing the baseline result into databank
+                    #Baseline schedule is decided only once per simulation
+                    if (
+                        unit.baseline_schedule
+                        and unit.id not in self._stored_dsm_schedules
+                    ):
+                        await self.context.send_message(
+                            content={
+                                "context": "write_results",
+                                "type": "dsm_schedule",
+                                "data": unit.baseline_schedule,
+                            },
+                            receiver_addr=db_addr,
+                        )
+                        self._stored_dsm_schedules.add(unit.id)
 
     def add_unit(
         self,

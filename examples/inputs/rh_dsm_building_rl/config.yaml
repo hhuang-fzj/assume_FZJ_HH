@@ -13,10 +13,10 @@ eom:
     unique_obs_dim : 0
 
   learning_config:
-    learning_mode: false
-    continue_learning: false
+    learning_mode: false #
+    continue_learning: True
     trained_policies_save_path: null
-    trained_policies_load_path: null
+    trained_policies_load_path: null #Add path to this, check  where the RNN is stored
     max_bid_price: 3000
     algorithm: matd3
     learning_rate: 0.001

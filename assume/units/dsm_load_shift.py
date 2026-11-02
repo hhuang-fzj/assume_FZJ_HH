@@ -87,6 +87,9 @@ class DSMFlex:
         super().__init__(**kwargs)
 
         self.components = copy.deepcopy(components)
+        # Fixed planned baseline from the first successful full-horizon solve.
+        # Later flexibility/rolling-horizon solves must not replace this snapshot.
+        self.baseline_schedule: list[dict] | None = None
         # Keep configured scalars before setup replaces dictionaries with instances
         # and rolling-horizon solves carry forward different initial states.
         self._component_metadata = []
@@ -1577,6 +1580,46 @@ class DSMFlex:
             # Display the Objective Function Value
             objective_value = instance.obj_rule_opt()
             logger.debug("The value of the objective function is %s.", objective_value)
+
+            if self.baseline_schedule is None:
+                schedule = []
+                for metadata in self._component_metadata:
+                    technology = metadata["technology"]
+                    if technology not in ("generic_storage", "heat_pump"):
+                        continue
+                    component = metadata["component"]
+                    block = instance.dsm_blocks[component]
+                    if technology == "generic_storage":
+                        soc_start = pyo.value(block.initial_soc)
+                    for i, t in enumerate(instance.time_steps):
+                        record = {
+                            "time": self.index[i],
+                            "parent_unit": self.id,
+                            "component": component,
+                            "soc_start": None,
+                            "soc_end": None,
+                            "power_in": None,
+                            "power_out": None,
+                            "heat_out": None,
+                            "cop": None,
+                        }
+                        if technology == "generic_storage":
+                            soc_end = pyo.value(block.soc[t])
+                            record.update(
+                                soc_start=soc_start,
+                                soc_end=soc_end,
+                                power_in=pyo.value(block.charge[t]),
+                                power_out=pyo.value(block.discharge[t]),
+                            )
+                            soc_start = soc_end
+                        else:
+                            record.update(
+                                power_in=pyo.value(block.power_in[t]),
+                                heat_out=pyo.value(block.heat_out[t]),
+                                cop=pyo.value(block.cop),
+                            )
+                        schedule.append(record)
+                self.baseline_schedule = schedule
 
         elif results.solver.termination_condition == TerminationCondition.infeasible:
             logger.warning("The model is infeasible - check constraints.")
