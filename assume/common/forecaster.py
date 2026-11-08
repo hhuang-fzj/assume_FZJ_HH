@@ -416,6 +416,12 @@ class EnergyHubForecaster(CustomUnitForecaster):
         initializing_unit.setup_model()
 
 
+class WasteHeatRecoveryForecaster(EnergyHubForecaster):
+    """Reuse the hub price initialization without requiring DSM demand inputs."""
+    def __init__(self, index: ForecastIndex, fuel_prices: dict[str, ForecastSeries], **kwargs):
+        super().__init__(index, fuel_prices, dsm_demands={}, **kwargs)
+
+
 class DemandForecaster(UnitForecaster):
     """Forecaster for demand units.
 

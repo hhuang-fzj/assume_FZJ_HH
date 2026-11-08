@@ -32,6 +32,7 @@ from assume.common.forecaster import (
     SteelplantForecaster,
     UnitForecaster,
     UnitsOperatorForecaster,
+    WasteHeatRecoveryForecaster,
 )
 from assume.common.market_objects import MarketConfig, MarketProduct
 from assume.common.utils import (
@@ -790,6 +791,13 @@ def load_config_and_create_forecaster(
                 unit_forecast_algorithms = get_unit_forecast_algorithms(
                     forecast_algorithms, unit
                 )
+                if type == "waste_heat_recovery":
+                    unit_forecasts[id] = WasteHeatRecoveryForecaster(
+                        index=shared_unit_index,
+                        availability=availability.get(id, pd.Series(1.0, index, name=id)),
+                        forecast_algorithms=unit_forecast_algorithms,
+                        fuel_prices=fuel_prices_df,
+                    )
                 if type == "building":
 
                     def get_building_profile(column_name: str) -> pd.Series:

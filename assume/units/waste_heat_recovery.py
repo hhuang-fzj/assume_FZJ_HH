@@ -8,7 +8,7 @@ import pyomo.environ as pyo
 import pandas as pd
 
 from assume.common.base import SupportsMinMax
-from assume.common.forecaster import UnitForecaster
+from assume.common.forecaster import WasteHeatRecoveryForecaster
 from assume.units.comando_facade import ComandoFacade
 
 from comando.core import System
@@ -28,7 +28,7 @@ class WasteHeatRecovery(ComandoFacade, SupportsMinMax):
             id: str,
             unit_operator: str,
             bidding_strategies: dict,
-            forecaster: UnitForecaster,
+            forecaster: WasteHeatRecoveryForecaster,
             components: dict[str, dict] = None,
             technology: str = "waste_heat_recovery",
             objective: str = "min_variable_cost",
@@ -49,7 +49,7 @@ class WasteHeatRecovery(ComandoFacade, SupportsMinMax):
         for component in self.required_technologies:
             if component not in components.keys():
                 raise ValueError(
-                    f"Component {component} is required for the steel plant unit."
+                    f"Component {component} is required for the unit."
                 )
 
         # check if the provided components are valid and do not contain any unknown components
@@ -59,17 +59,15 @@ class WasteHeatRecovery(ComandoFacade, SupportsMinMax):
                     and component not in self.optional_technologies
             ):
                 raise ValueError(
-                    f"Components {component} is not a valid component for the steel plant unit."
+                    f"Components {component} is not a valid component for the unit."
                 )
 
-        self.electricity_price = self.forecaster['price_LLEC']
-        self.ht_heating_price = self.forecaster['fuel_price_HT_heat']
-        self.lt_heating_price = self.forecaster['fuel_price_HT_heat']#ToDo: Change this to Low Temp Price
+        self.ht_heating_price = self.forecaster.fuel_prices['HT_heat']
+        self.lt_heating_price = self.forecaster.fuel_prices['HT_heat']#ToDo: Change this to Low Temp Price
 
         self.objective = objective
 
-        # Initialize the model
-        self.setup_model()
+        # WasteHeatRecoveryForecaster builds the model after initializing market prices.
     def initialize_energy_system(self):
         comps = self.components.values()
 
@@ -106,6 +104,7 @@ class WasteHeatRecovery(ComandoFacade, SupportsMinMax):
         index_pd_extent = index_pd.append(pd.DatetimeIndex([index_pd[-1] + self.index.freq]))
         params['Electricity_price'] = self.electricity_price.as_pd_series()
         params['HtHeating_price'] = self.ht_heating_price.as_pd_series()
+        params = {name: series.reset_index(drop=True) for name, series in params.items()}
 
         ts = list((index_pd_extent[1:] - index_pd_extent[:-1]).seconds / 3600)
         ts = {i: time_step for i, time_step in enumerate(ts)}
