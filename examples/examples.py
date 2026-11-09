@@ -120,6 +120,10 @@ available_examples = {
     "LLEC_2024_multi_energy_market": {
         "scenario": "LLEC",
         "study_case": "LLEC_2024_multi_energy",
+    },
+    "2024_multi_energy_market_emission": {
+        "scenario": "LLEC",
+        "study_case": "2024_multi_energy_emission",
     }
 }
 

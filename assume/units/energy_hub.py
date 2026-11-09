@@ -70,7 +70,7 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
         for component in self.required_technologies:
             if component not in components.keys():
                 raise ValueError(
-                    f"Component {component} is required for the steel plant unit."
+                    f"Component {component} is required for the Energy Hub."
                 )
 
         # check if the provided components are valid and do not contain any unknown components
@@ -80,7 +80,7 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
                 and component not in self.optional_technologies
             ):
                 raise ValueError(
-                    f"Components {component} is not a valid component for the steel plant unit."
+                    f"Components {component} is not a valid component for the Energy Hub."
                 )
 
         self.natural_gas_price = self.forecaster.fuel_prices['natural gas']
@@ -158,11 +158,22 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
 
         ts = list((index_pd_extent[1:] - index_pd_extent[:-1]).seconds / 3600)
         ts = {i: time_step for i, time_step in enumerate(ts)}
-        P = self.comando_system.create_problem(
-            *make_tac_objective(self.comando_system, n=20, i=0.012),
-            data=params,
-            name='WVVZ',
-            timesteps= ts
-        )
+
+        if self.objective == "GWI":
+            co2_tot = self.comando_system.get_exp0ression('emissions')
+
+            P = self.comando_system.create_problem(
+                operational_objective=co2_tot,
+                timesteps=ts,
+                data=params,
+                name='PreJuCells'
+            )
+        else:
+            P = self.comando_system.create_problem(
+                *make_tac_objective(self.comando_system, n=20, i=0.012),
+                data=params,
+                name='WVVZ',
+                timesteps= ts
+            )
 
         return to_gurobi(P)
