@@ -11,7 +11,6 @@ from assume.common.base import SupportsMinMax
 from assume.common.forecaster import EnergyHubForecaster
 from assume.units.comando_facade import ComandoFacade
 
-from comando.core import System
 from comando.utility import make_tac_objective
 from comando.interfaces.gurobi import to_gurobi
 
@@ -86,7 +85,6 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
         self.natural_gas_price = self.forecaster.fuel_prices['natural gas']
         self.ht_heating_price = self.forecaster.fuel_prices['HT_heat']
         #self.cooling_price = self.forecaster['price_COOL']
-        #self.co2_price = self.forecaster['price_CO2']#ToDo: add Emission price
         self.cooling_demand = self.forecaster.dsm_demands['Cooling Demand [MW]']
         #self.heating_demand = self.forecaster['dsm_Heating Demand [MW]']
 
@@ -94,45 +92,11 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
 
         # EnergyHubForecaster builds the model after initializing market prices.
 
-    def initialize_energy_system(self):
-        comps = self.components.values()
+    def initialize_demands(self):
+        # WVVZ's existing cooling demand; do not consume other units' columns.
+        from assume.units.comando_components import comando_dst
 
-        conns = {
-            'Power_Bus': [
-                self.components['chp_CHP_1'].POWER_OUT,
-                self.components['chp_CHP_2'].POWER_OUT,
-                self.components['chp_CHP_3'].POWER_OUT,
-                self.components['compression_chiller_CC'].IN,
-                self.components['grid_Electricity'].CONSUMPTION,
-                self.components['grid_Electricity'].FEEDIN #this is the interface for selling electricity
-            ],
-            'Heat_Bus': [
-                self.components['chp_CHP_1'].HEAT_OUT,
-                self.components['chp_CHP_2'].HEAT_OUT,
-                self.components['chp_CHP_3'].HEAT_OUT,
-                self.components['boiler_B_1'].OUT,
-                self.components['boiler_B_2'].OUT,
-                self.components['absorption_chiller_AC'].IN,
-                self.components['grid_HT_Heat'].FEEDIN,
-                self.components['grid_HT_Heat'].CONSUMPTION,
-                #self.components['demand_Heating'].IN,
-            ],
-            'Gas_Bus': [
-                self.components['chp_CHP_1'].IN,
-                self.components['chp_CHP_2'].IN,
-                self.components['chp_CHP_3'].IN,
-                self.components['boiler_B_1'].IN,
-                self.components['boiler_B_2'].IN,
-                self.components['grid_Gas'].CONSUMPTION,
-            ],
-            'Cooling_Bus': [
-                self.components['compression_chiller_CC'].OUT,
-                self.components['absorption_chiller_AC'].OUT,
-                self.components['demand_Cooling'].IN,
-            ]
-        }
-
-        self.comando_system = System(label=self.technology, components=comps, connections=conns)
+        self.components["demand_Cooling"] = comando_dst["demand"](f"{self.id}_Cooling")
 
     def define_constraints(self):
         # add expressions to energy system
@@ -149,10 +113,10 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
         index_pd = self.index.as_datetimeindex()
         index_pd_extent = index_pd.append(pd.DatetimeIndex([index_pd[-1] + self.index.freq]))
         #params['Heating_demand'] = self.heating_demand.as_pd_series()
-        params['Cooling_demand'] = self.cooling_demand.as_pd_series()
-        params['Electricity_price'] = self.electricity_price.as_pd_series()
-        params['Gas_price'] = self.natural_gas_price.as_pd_series()
-        params['HtHeating_price'] = self.ht_heating_price.as_pd_series()
+        self.bind_series(params, 'demand_Cooling', 'demand', self.cooling_demand)
+        self.bind_series(params, 'grid_Electricity', 'price', self.electricity_price)
+        self.bind_series(params, 'grid_Gas', 'price', self.natural_gas_price)
+        self.bind_series(params, 'grid_HT_Heat', 'price', self.ht_heating_price)
         # COMANDO timesteps below use integer labels, not datetime labels.
         params = {name: series.reset_index(drop=True) for name, series in params.items()}
 

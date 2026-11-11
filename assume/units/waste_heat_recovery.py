@@ -11,7 +11,6 @@ from assume.common.base import SupportsMinMax
 from assume.common.forecaster import WasteHeatRecoveryForecaster
 from assume.units.comando_facade import ComandoFacade
 
-from comando.core import System
 from comando.utility import make_tac_objective
 from comando.interfaces.gurobi import to_gurobi
 
@@ -68,31 +67,6 @@ class WasteHeatRecovery(ComandoFacade, SupportsMinMax):
         self.objective = objective
 
         # WasteHeatRecoveryForecaster builds the model after initializing market prices.
-    def initialize_energy_system(self):
-        comps = self.components.values()
-
-        conns = {
-            'Power_Bus': [
-                self.components['hpc_JUHPC'].EL_IN,
-                self.components['heat_pump_HP'].IN,
-                self.components['grid_Electricity'].CONSUMPTION,
-                self.components['grid_Electricity'].FEEDIN #this is the interface for selling electricity
-            ],
-            'HT_Heat_Bus': [
-                self.components['heat_pump_HP'].OUT,
-                self.components['grid_HT_Heat'].FEEDIN,
-                self.components['grid_HT_Heat'].CONSUMPTION,
-            ],
-            'LT_Heat_Bus': [
-                self.components['heat_pump_HP'].Qdot_in,
-                self.components['hpc_JUHPC'].HEAT_OUT,
-                self.components['grid_HT_Heat'].FEEDIN,#ToDO: Change it to Grid_LT_Heat
-                self.components['grid_HT_Heat'].CONSUMPTION,
-            ],
-        }
-
-        self.comando_system = System(label=self.technology, components=comps, connections=conns)
-
     def define_constraints(self):
         # add expressions to energy system
         for expre in ['investment_costs', 'fixed_costs', 'variable_costs', 'emissions']:
@@ -102,8 +76,8 @@ class WasteHeatRecovery(ComandoFacade, SupportsMinMax):
         params = dict()
         index_pd = self.index.as_datetimeindex()
         index_pd_extent = index_pd.append(pd.DatetimeIndex([index_pd[-1] + self.index.freq]))
-        params['Electricity_price'] = self.electricity_price.as_pd_series()
-        params['HtHeating_price'] = self.ht_heating_price.as_pd_series()
+        self.bind_series(params, 'grid_Electricity', 'price', self.electricity_price)
+        self.bind_series(params, 'grid_HT_Heat', 'price', self.ht_heating_price)
         params = {name: series.reset_index(drop=True) for name, series in params.items()}
 
         ts = list((index_pd_extent[1:] - index_pd_extent[:-1]).seconds / 3600)

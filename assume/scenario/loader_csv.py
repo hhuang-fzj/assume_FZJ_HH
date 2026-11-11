@@ -302,6 +302,40 @@ def load_dsm_units(
     return unit_type_dict
 
 
+def attach_comando_configs(dsm_units: dict, scenario_path: str) -> None:
+    """Read only the selected scenario's explicit COMANDO configuration once."""
+    from assume.units import unit_types
+    from assume.units.comando_facade import ComandoFacade
+
+    active = {
+        name: frame for name, frame in dsm_units.items()
+        if not frame.empty and name in unit_types and issubclass(unit_types[name], ComandoFacade)
+    }
+    if not active:
+        return
+    path = Path(scenario_path) / "comando_connenction.yaml"
+    try:
+        with path.open(encoding="utf-8") as stream:
+            document = yaml.safe_load(stream)
+    except FileNotFoundError as exc:
+        ids = [str(uid) for frame in active.values() for uid in frame.index]
+        raise ValueError(f"{path}: missing COMANDO configuration for active units {ids}") from exc
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{path}: malformed COMANDO YAML") from exc
+    if not isinstance(document, dict) or not isinstance(document.get("units"), dict):
+        raise ValueError(f"{path}: expected a units mapping")
+    for frame in active.values():
+        sections = []
+        for uid in frame.index:
+            if str(uid) not in document["units"]:
+                raise ValueError(f"{path}: unit {uid!r}: missing active-unit section")
+            section = document["units"][str(uid)]
+            ComandoFacade.validate_comando_config(section, str(path), uid)
+            sections.append(copy.deepcopy(section))
+        frame["comando_config"] = pd.Series(sections, index=frame.index, dtype=object)
+        frame["comando_config_path"] = str(path)
+
+
 def replace_paths(config: dict, inputs_path: str):
     """
     This function replaces all config items which end with "_path"
@@ -655,6 +689,8 @@ def load_config_and_create_forecaster(
         units = load_dsm_units(path=path, config=config, file_name=unit_type)
         if units is not None:
             dsm_units.update(units)
+
+    attach_comando_configs(dsm_units, path)
 
     forecasts_df = load_file(
         path=path, config=config, file_name="forecasts_df", index=index

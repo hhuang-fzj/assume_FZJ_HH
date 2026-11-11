@@ -1,3 +1,9 @@
+from copy import deepcopy
+from inspect import signature
+from math import isfinite
+
+from comando.core import System
+
 from assume.common.fast_pandas import FastSeries
 from assume.units.comando_components import comando_dst
 from assume.common.temp_gurobi_visulize import interactive_timeseries_plot
@@ -9,94 +15,112 @@ from assume.common.gurobi_diagnoser import optimize_and_diagnose
 
 class ComandoFacade:
 
-    def __init__(self, components, **kwargs):
+    def __init__(self, components, comando_config=None, comando_config_path=None, **kwargs):
         super().__init__(**kwargs)
-        self.components = components
+        self.comando_config_path = comando_config_path or "<unit parameters>"
+        self.validate_comando_config(comando_config, self.comando_config_path, self.id)
+        self.comando_config = deepcopy(comando_config)
+        self.components = deepcopy(components or {})
         self.horizon_mode = 'full_horizon'
-        #self.demand = kwargs['demand']#ToDo: move this to energy hub, it is not general feature of a COMANDO Unit
+
+    @staticmethod
+    def validate_comando_config(config, path, unit_id):
+        """Validate static YAML settings without constructing components."""
+        context = f"{path}: unit {unit_id!r}"
+        if not isinstance(config, dict) or set(config) != {"grids", "connections"}:
+            raise ValueError(f"{context}: expected grids and connections mappings")
+        grids, connections = config["grids"], config["connections"]
+        if not isinstance(grids, dict) or not isinstance(connections, dict) or not connections:
+            raise ValueError(f"{context}: grids must be a mapping and connections a nonempty mapping")
+        allowed = set(signature(comando_dst["grid"]).parameters) - {"label"}
+        for key, params in grids.items():
+            where = f"{context}: grid {key!r}"
+            if not isinstance(key, str) or not key.startswith("grid_"):
+                raise ValueError(f"{where}: expected a grid_ component key")
+            if not isinstance(params, dict) or set(params) - allowed:
+                raise ValueError(f"{where}: invalid Grid constructor parameters (label is generated)")
+            for name, value in params.items():
+                if name in {"single_connector", "constrain_flow"}:
+                    valid = isinstance(value, bool)
+                else:
+                    valid = (value is None and name in {"consumption_limit", "feedin_limit"}) or (
+                        isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value)
+                        and (not name.endswith("_limit") or value >= 0)
+                    )
+                if not valid:
+                    raise ValueError(f"{where}: invalid static setting {name!r}")
+        assigned = {}
+        for bus, endpoints in connections.items():
+            if not isinstance(bus, str) or not bus or not isinstance(endpoints, list) or not endpoints:
+                raise ValueError(f"{context}: bus {bus!r}: expected a nonempty endpoint list")
+            for endpoint in endpoints:
+                where = f"{context}: bus {bus!r}: endpoint {endpoint!r}"
+                if (not isinstance(endpoint, (list, tuple)) or len(endpoint) != 2
+                        or not all(isinstance(item, str) and item.isidentifier() for item in endpoint)):
+                    raise ValueError(f"{where}: expected [component_key, connector_name] identifiers")
+                pair = tuple(endpoint)
+                if pair in assigned:
+                    raise ValueError(f"{where}: duplicate endpoint; already assigned to bus {assigned[pair]!r}")
+                assigned[pair] = bus
+
+    def component_label(self, key):
+        """Keep familiar grid labels, with independent labels in every unit."""
+        suffix = key.removeprefix("grid_")
+        return f"{self.id}_{suffix}"
 
     def initialize_components(self):
-        """
-        Initializes the COMANDO components by creating COMANDO energy system and specify the connections.
+        equipment = deepcopy(self.components)
+        self.components = {}
+        for technology, records in equipment.items():
+            if technology not in comando_dst or technology in {"grid", "demand"}:
+                raise ValueError(f"{self.comando_config_path}: unit {self.id!r}: unsupported equipment {technology!r}")
+            for record in records if isinstance(records, list) else [records]:
+                params = deepcopy(record)
+                label = params["label"]
+                key = f"{technology}_{label}"
+                if key in self.components:
+                    raise ValueError(f"{self.comando_config_path}: unit {self.id!r}: duplicate component {key!r}")
+                # Keep input keys stable; namespace COMANDO labels across units.
+                params["label"] = label if label.startswith(f"{self.id}_") else f"{self.id}_{label}"
+                self.components[key] = comando_dst[technology](**params)
+        for key, record in self.comando_config["grids"].items():
+            params = deepcopy(record)
+            params["label"] = self.component_label(key)
+            self.components[key] = comando_dst["grid"](**params)
 
-        This method iterates over the provided components, instantiates their corresponding classes,
-        and adds the respective COMANDO.components to the COMANDO energy system.
+    def initialize_demands(self):
+        """Unit classes create their own demands after equipment and grids."""
 
-        Args:
-            components (dict[str, dict]): A dictionary where each key is a technology name and
-                                        the value is a dictionary of parameters for the respective technology.
-                                        Each technology is mapped to a corresponding class in `demand_side_technologies`.
+    def initialize_energy_system(self):
+        connections = {}
+        for bus, endpoints in self.comando_config["connections"].items():
+            connections[bus] = []
+            for key, port in endpoints:
+                context = (f"{self.comando_config_path}: unit {self.id!r}: "
+                           f"bus {bus!r}: endpoint {[key, port]!r}")
+                if key not in self.components:
+                    raise ValueError(f"{context}: unknown component (equipment is not created automatically)")
+                component = self.components[key]
+                if port not in component.connectors:
+                    raise ValueError(f"{context}: unknown or disabled connector")
+                connections[bus].append(component.connectors[port])
+        self.comando_system = System(
+            label=f"{self.id}_{self.technology}",
+            components=list(self.components.values()), connections=connections,
+        )
 
-        The method:
-        - Looks up the corresponding class for each technology in `demand_side_technologies`.
-        - Instantiates the class by passing the required parameters.
-        - Adds the resulting block to the model under the `dsm_blocks` attribute.
-        """
-        components = self.components.copy()#store the components config for the creation of component classes
-        self.components.clear()# Clear the space for component classes
-        feuls = list()# temporal container for all the fuel types of the main component
-        #add main components by reading the csv configuration
-        for technology, component_data in components.items():
-            if technology in comando_dst:
-                # Get the class from the dictionary mapping (adjust `demand_side_technologies` to hold classes)
-                component_class = comando_dst[technology]
-                if isinstance(component_data, list):#If multiple components using same technology
-                    for data in component_data:
-                        # Instantiate the component with the required parameters (unpack the component_data dictionary)
-                        component_instance = component_class(**data)
-                        self.components[technology + "_" + data['label']] = component_instance
-                        feuls.append(data['fuel_type'])
-                else:
-                    # Instantiate the component with the required parameters (unpack the component_data dictionary)
-                    component_instance = component_class(**component_data)
-                    self.components[technology + "_" + component_data['label']] = component_instance
-                    feuls.append(component_data['fuel_type'])
-        #Add ancillary components: grids, demands
-        #Get bidirectional electricity grid interface
-        grid_data = {
-            'label': str(self.id + "_Electricity"),
-            'compensation': 50,#ToDo: Update this value with the market clearing result
-            'co2_factor': 0,
-            'constrain_flow': True,
-            'feedin_limit': None,
-        }
-        component_class = comando_dst['grid']
-        component_instance = component_class(**grid_data)
-        self.components["grid_Electricity"] = component_instance
+    def parameter_name(self, component_key, parameter):
+        """Use actual symbol names after per-unit label generation."""
+        return self.components[component_key][parameter].name
 
-        # Get the bidirectional heat grid interface
-        ht_grid_data = {
-            'label': str(self.id + "_HT_Heat"),
-            'compensation': 93.7,
-            'co2_factor': 0,
-            'constrain_flow': True,
-            'feedin_limit': None,
-        }
-        component_class = comando_dst['grid']
-        component_instance = component_class(**ht_grid_data)
-        self.components["grid_HT_Heat"] = component_instance
-
-        #Get other energy sources for multi-energy unit depending on the fuels they need
-        if 'gas' in feuls:
-            grid_data = {
-                'label': 'Gas',
-                'compensation': 0,
-                'co2_factor': 0.201,
-            }
-            component_class = comando_dst['grid']
-            component_instance = component_class(**grid_data)
-            self.components["grid_Gas"] = component_instance
-
-        dsm_demand_forecasts = self.get_dsm_forecasts()#ToDo: delete cooling demand in dsm Unit
-        if self.id == 'WVVZ':
-            for forecast_key, forecast_series in dsm_demand_forecasts.items():
-                energy_type = forecast_key.split("Demand")[0].strip()
-
-                component_class = comando_dst["demand"]
-                component_instance = component_class(energy_type)
-
-                self.components[f"demand_{energy_type}"] = component_instance
-
+    def bind_series(self, data, component_key, parameter, series):
+        """Bind forecasts to real symbols; disabled grid directions have none."""
+        settings = self.comando_config["grids"].get(component_key, {})
+        if parameter == "price" and settings.get("consumption_limit") == 0:
+            return
+        if parameter == "compensation" and settings.get("feedin_limit", 0) == 0:
+            return
+        data[self.parameter_name(component_key, parameter)] = series.as_pd_series()
 
     def setup_model(self, presolve=True):
         # Initialize the Pyomo model
@@ -105,6 +129,7 @@ class ComandoFacade:
         self.optimisation_counter = 0
 
         self.initialize_components()
+        self.initialize_demands()
         self.initialize_energy_system()#Define the specific connection between components within a unit.
 
         self.define_constraints()# Define extra constraints for this specific unit(Comando System).
@@ -140,28 +165,27 @@ class ComandoFacade:
             print("No feasible solution found. Status:", self.opt_model.Status)
             status = optimize_and_diagnose(
                 model= self.opt_model,
-                file_prefix="HT_Heat",
+                file_prefix="HT_Heat", #Identifier for the scenario
             )
         print("Solving...")
 
-        opt_power_volume = [
-            self.opt_model.getVarByName(f"{self.id}_Electricity_consumption[{t}]").X
-            - self.opt_model.getVarByName(f"{self.id}_Electricity_feedin[{t}]").X
-            for t in range(len(self.index))
-        ]
-        opt_HT_heat_volume = [
-            self.opt_model.getVarByName(f"{self.id}_HT_Heat_consumption[{t}]").X
-            - self.opt_model.getVarByName(f"{self.id}_HT_Heat_feedin[{t}]").X
-            for t in range(len(self.index))
-        ]
-
-
-        self.opt_power_volume = FastSeries(
-            index=self.index,
-            value=opt_power_volume,
-        )
-        self.opt_HT_heat_volume = FastSeries(
-            index=self.index,
-            value=opt_HT_heat_volume,
-        )
-
+        if self.opt_model.SolCount <= 0:
+            raise RuntimeError(f"Unit {self.id}: no solution available; status {self.opt_model.Status}")
+        # Resolve symbols from actual configured grids, including disabled ports.
+        for key, output in [("grid_Electricity", "opt_power_volume"),
+                            ("grid_HT_Heat", "opt_HT_heat_volume"),
+                            ("grid_LT_Heat", "opt_LT_heat_volume")]:
+            if key not in self.components:
+                continue
+            grid = self.components[key]
+            values = []
+            for t in range(len(self.index)):
+                value = 0
+                for variable, sign in [("consumption", 1), ("feedin", -1)]:
+                    try:
+                        symbol = grid[variable]
+                    except KeyError:  # Direction disabled by a zero limit.
+                        continue
+                    value += sign * self.opt_model.getVarByName(f"{symbol.name}[{t}]").X
+                values.append(value)
+            setattr(self, output, FastSeries(index=self.index, value=values))
