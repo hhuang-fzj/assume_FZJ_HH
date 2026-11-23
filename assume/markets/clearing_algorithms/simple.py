@@ -6,6 +6,8 @@ import logging
 import random
 from datetime import timedelta
 from itertools import groupby
+from math import isclose, isfinite
+from numbers import Real
 from operator import itemgetter
 
 from assume.common.market_objects import MarketConfig, MarketProduct, Orderbook
@@ -185,6 +187,268 @@ class PayAsClearRole(MarketRole):
         flows = []
 
         return accepted_orders, rejected_orders, meta, flows
+
+
+class PayAsClearEligibleRole(PayAsClearRole):
+    """Uniform-price clearing with explicit direct seller/buyer exclusions.
+
+    At each candidate supply price, find the greatest bid surplus, then traded
+    volume. Residual paths can reassign earlier matches instead of starving an
+    eligible buyer. Compare candidates to enforce one price within every
+    accepted order's limit. Ties retain the lowest candidate price and input
+    order. This is counterparty eligibility, not provenance through resellers.
+
+    Empty policies delegate to ordinary pay_as_clear, including its tie policy.
+    Restricted clearing supports scalar, continuous-delivery MW orders only.
+    """
+
+    _epsilon = 1e-9
+
+    def __init__(self, marketconfig: MarketConfig):
+        super().__init__(marketconfig)
+        rules = marketconfig.param_dict.get("forbidden_trades", [])
+        if not isinstance(rules, list):
+            raise ValueError(f"{marketconfig.market_id}: forbidden_trades must be a list")
+        self.forbidden_trades = set()
+        for rule in rules:
+            if (
+                not isinstance(rule, dict)
+                or set(rule) != {"seller", "buyer"}
+                or any(not isinstance(v, str) or not v.strip() for v in rule.values())
+            ):
+                raise ValueError(
+                    f"{marketconfig.market_id}: invalid forbidden_trades entry "
+                    f"{rule!r}; use seller/buyer unit IDs"
+                )
+            pair = (rule["seller"], rule["buyer"])
+            if pair in self.forbidden_trades:
+                raise ValueError(f"{marketconfig.market_id}: duplicate forbidden trade {pair!r}")
+            self.forbidden_trades.add(pair)
+        self.matched_trades = []
+
+        # Match records assume MW, MWh and EUR/MWh. Check the declared units;
+        # this cannot detect incorrectly scaled numerical inputs.
+        # Electricity-only support is an implementation scope, not a flow constraint.
+        if self.forbidden_trades and (
+            marketconfig.volume_unit != "MW" or marketconfig.product_type != "energy"
+        ):
+            raise ValueError(
+                f"{marketconfig.market_id}: eligible clearing requires energy products in MW"
+            )
+        if self.forbidden_trades and marketconfig.price_unit not in {"EUR/MWh", "€/MWh"}:
+            raise ValueError(f"{marketconfig.market_id}: eligible clearing requires prices in EUR/MWh")
+
+    def _validate_participants(self, orderbook):
+        # Currently every unit named in a restriction must remain registered,
+        # even if it submits no bid. Unit identity is separate from agent identity.
+        # TODO: Distinguish invalid configured unit IDs from temporarily absent
+        # participants (e.g. an EV that deregisters and later returns). Validate
+        # rule names against the scenario inventory where available, while allowing
+        # valid restrictions to remain inactive during absence. Keep rejecting
+        # submitted orders from unregistered units. Defer this lifecycle change;
+        # the strict missing-unit error below remains in effect for now.
+        by_agent = {
+            agent: {unit["id"] for unit in units}
+            for agent, units in self.registered_agents.items()
+        }
+        known = {unit for units in by_agent.values() for unit in units}
+        required = {unit for pair in self.forbidden_trades for unit in pair}
+        missing = required - known
+        if missing:
+            raise ValueError(
+                f"{self.marketconfig.market_id}: forbidden_trades references "
+                f"unregistered unit IDs {sorted(missing)!r}"
+            )
+        identities = set()
+        for order in orderbook:
+            # MarketRole checks the submitting agent; additionally verify the
+            # unit's registration, ownership and bid identity for pair restrictions.
+            unit, bid = order.get("unit_id"), order.get("bid_id")
+            if unit not in known or not isinstance(bid, str) or not bid:
+                raise ValueError(
+                    f"{self.marketconfig.market_id}: orders require registered unit_id "
+                    f"and nonempty bid_id; got {unit!r}, {bid!r}"
+                )
+            if "agent_addr" in order and unit not in by_agent.get(order["agent_addr"], set()):
+                raise ValueError(
+                    f"{self.marketconfig.market_id}: unit {unit!r} is not "
+                    "registered to the submitting agent"
+                )
+            identity = (unit, bid, order["start_time"], order["end_time"])
+            if identity in identities:
+                raise ValueError(f"{self.marketconfig.market_id}: duplicate order identity {identity!r}")
+            identities.add(identity)
+            if (
+                order.get("only_hours") is not None
+                or order["end_time"] <= order["start_time"]
+                # Advanced-order dictionary keys used by advanced_orders.py and
+                # complex_clearing.py: SB = simple, BB = block, LB = linked bid.
+                # This matcher cannot enforce minimum acceptance or parent links.
+                or order.get("bid_type", "SB") != "SB"
+                or order.get("min_acceptance_ratio") not in (None, 0)
+                or order.get("parent_bid_id") is not None
+            ):
+                raise ValueError(
+                    f"{self.marketconfig.market_id}: eligible clearing supports "
+                    f"simple continuous-delivery orders only ({identity!r})"
+                )
+            for key in ("volume", "price"):
+                if (
+                    isinstance(order[key], bool)
+                    or not isinstance(order[key], Real)
+                    or not isfinite(order[key])
+                ):
+                    raise ValueError(
+                        f"{self.marketconfig.market_id}: {identity!r}: "
+                        f"{key} must be a finite scalar"
+                    )
+
+    def _match_at_price(self, sellers, buyers, price):
+        """Successive shortest residual paths; no optimization by solver.
+
+        Path cost is ask minus bid. Negative paths increase surplus; zero-cost
+        paths increase volume without sacrificing surplus. Reverse edges allow
+        reassignment. Stop before any path would reduce total surplus.
+        """
+        source, sink = len(sellers) + len(buyers), len(sellers) + len(buyers) + 1
+        graph = [[] for _ in range(sink + 1)]
+
+        def edge(a, b, capacity, cost):
+            forward = [b, len(graph[b]), capacity, cost]
+            reverse = [a, len(graph[a]), 0.0, -cost]
+            graph[a].append(forward)
+            graph[b].append(reverse)
+            return forward, reverse
+
+        for i, seller in enumerate(sellers):
+            if seller["price"] <= price:
+                edge(source, i, seller["volume"], seller["price"])
+        for j, buyer in enumerate(buyers):
+            if buyer["price"] >= price:
+                edge(len(sellers) + j, sink, -buyer["volume"], -buyer["price"])
+        pairs = []
+        for i, seller in enumerate(sellers):
+            for j, buyer in enumerate(buyers):
+                if (
+                    seller["price"] <= price <= buyer["price"]
+                    and (seller["unit_id"], buyer["unit_id"]) not in self.forbidden_trades
+                ):
+                    _, reverse = edge(
+                        i, len(sellers) + j,
+                        min(seller["volume"], -buyer["volume"]), 0.0,
+                    )
+                    pairs.append((i, j, reverse))
+        while True:
+            distance = [float("inf")] * len(graph)
+            previous = [None] * len(graph)
+            distance[source] = 0.0
+            # Bellman-Ford permits negative bid-surplus edges and reverse paths.
+            for _ in range(len(graph) - 1):
+                changed = False
+                for a, edges in enumerate(graph):
+                    for k, (b, _, capacity, cost) in enumerate(edges):
+                        if (
+                            capacity > self._epsilon
+                            and distance[a] + cost < distance[b] - self._epsilon
+                        ):
+                            distance[b] = distance[a] + cost
+                            previous[b] = (a, k)
+                            changed = True
+                if not changed:
+                    break
+            if previous[sink] is None or distance[sink] > self._epsilon:
+                break
+            path, node = [], sink
+            while node != source:
+                a, k = previous[node]
+                path.append((a, k))
+                node = a
+                if len(path) >= len(graph):
+                    raise RuntimeError("Eligible clearing encountered a cyclic residual path")
+            amount = min(graph[a][k][2] for a, k in path)
+            for a, k in path:
+                b, reverse, _, _ = graph[a][k]
+                graph[a][k][2] -= amount
+                graph[b][reverse][2] += amount
+        return [(i, j, reverse[2]) for i, j, reverse in pairs if reverse[2] > self._epsilon]
+
+    def clear(self, orderbook: Orderbook, market_products):
+        self.matched_trades = []
+        if not self.forbidden_trades:
+            return super().clear(orderbook, market_products)
+        self._validate_participants(orderbook)
+        accepted, rejected, meta = [], [], []
+        getter = itemgetter("start_time", "end_time", "only_hours")
+        for product, orders in groupby(sorted(orderbook, key=getter), getter):
+            orders = list(orders)
+            if product not in market_products:
+                for order in orders:
+                    order.update(accepted_volume=0.0, accepted_price=0.0)
+                rejected.extend(orders)
+                continue
+            sellers = [o for o in orders if o["volume"] > 0]
+            buyers = [o for o in orders if o["volume"] < 0]
+            best, best_surplus, best_volume = [], 0.0, 0.0
+            for price in sorted({o["price"] for o in sellers}):
+                matches = self._match_at_price(sellers, buyers, price)
+                surplus = sum(
+                    v * (buyers[j]["price"] - sellers[i]["price"])
+                    for i, j, v in matches
+                )
+                volume = sum(v for _, _, v in matches)
+                if (
+                    surplus > best_surplus + self._epsilon
+                    or (
+                        isclose(surplus, best_surplus, rel_tol=0, abs_tol=self._epsilon)
+                        and volume > best_volume + self._epsilon
+                    )
+                ):
+                    best, best_surplus, best_volume = matches, surplus, volume
+            clearing_price = max((sellers[i]["price"] for i, _, _ in best), default=0.0)
+            for order in orders:
+                order.update(accepted_volume=0.0, accepted_price=clearing_price)
+            duration = (product[1] - product[0]) / timedelta(hours=1)
+            volume_scale = self.marketconfig.volume_tick or 1.0
+            price_scale = self.marketconfig.price_tick or 1.0
+            for i, j, volume in best:
+                seller, buyer = sellers[i], buyers[j]
+                seller["accepted_volume"] += volume
+                buyer["accepted_volume"] -= volume
+                self.matched_trades.append(
+                    {
+                        "market_id": self.marketconfig.market_id,
+                        "start_time": product[0], "end_time": product[1],
+                        "seller_unit_id": seller["unit_id"],
+                        "buyer_unit_id": buyer["unit_id"],
+                        "seller_bid_id": seller["bid_id"],
+                        "buyer_bid_id": buyer["bid_id"],
+                        "volume_mw": volume * volume_scale,
+                        "energy_mwh": volume * volume_scale * duration,
+                        "duration_hours": duration,
+                        "price_eur_per_mwh": clearing_price * price_scale,
+                    }
+                )
+            supply = [o for o in sellers if o["accepted_volume"] > self._epsilon]
+            demand = [o for o in buyers if o["accepted_volume"] < -self._epsilon]
+            accepted.extend(supply + demand)
+            rejected.extend(o for o in orders if abs(o["accepted_volume"]) <= self._epsilon)
+            meta.append(calculate_meta(supply, demand, product))
+        return accepted, rejected, meta, []
+
+    async def store_order_book(self, orderbook: Orderbook):
+        # Other clearing roles inherit market_orders storage from MarketRole.
+        # Preserve it and additionally send bilateral market_matches records.
+        await super().store_order_book(orderbook)
+        db_addr = self.context.data.get("output_agent_addr")
+        if db_addr and self.matched_trades:
+            await self.context.send_message(
+                receiver_addr=db_addr,
+                content={
+                    "context": "write_results", "type": "market_matches",
+                    "market_id": self.marketconfig.market_id,
+                    "data": self.matched_trades,
+                },
+            )
 
 
 class PayAsBidRole(MarketRole):

@@ -6,12 +6,13 @@ from assume.common.market_objects import Orderbook
 from assume.markets.base_market import MarketRole
 
 from .contracts import PayAsBidContractRole
-from .simple import PayAsBidRole, PayAsClearRole
+from .simple import PayAsBidRole, PayAsClearEligibleRole, PayAsClearRole
 from .complex_clearing import ComplexClearingRole
 from .complex_clearing_dmas import ComplexDmasClearingRole
 
 clearing_mechanisms: dict[str, MarketRole] = {
     "pay_as_clear": PayAsClearRole,
+    "pay_as_clear_eligible": PayAsClearEligibleRole,
     "pay_as_bid": PayAsBidRole,
     "pay_as_bid_contract": PayAsBidContractRole,
     "complex_clearing": ComplexClearingRole,
