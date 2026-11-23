@@ -89,4 +89,78 @@ class WasteHeatRecovery(ComandoFacade, SupportsMinMax):
             timesteps= ts
         )
 
+        self.comando_problem = P
         return to_gurobi(P)
+
+    def cost_recovery_selling_price(self, start, product_type, export_volume, config):
+        """HP-only HT cost recovery; LT source heat and additional variable O&M are free.
+
+        COP uses modeled HP heat/electricity, excluding mandatory HPC electricity.
+        Fixed O&M excludes investment annuities, HPC/IT and separate infrastructure.
+        This forecast/pre-clearing calculation does not secure delivery after clearing.
+        """
+        if export_volume <= 1e-9:
+            return None, []
+        if product_type != "ht_heat":
+            raise ValueError(f"{self.id}: cost recovery is defined only for HT heat")
+        step = self.cost_recovery_timestep(start)
+        price = float(self.electricity_price.at[start])
+        if not isfinite(price):
+            raise ValueError(f"{self.id}: non-finite electricity forecast at {start}")
+        hours = self.required_cost_recovery_input(config, "full_load_hours")
+        variable = self.required_cost_recovery_input(config, "variable_nonfuel_cost_heat")
+        records = []
+        for key, hp in self.components.items():
+            if not key.startswith("heat_pump_"):
+                continue
+            heat = float(evaluate(hp.get_expression("output"), idx=step))
+            if not isfinite(heat) or heat < -1e-8:
+                raise ValueError(f"{self.id}: invalid {key} HT generation at {start}")
+            if heat <= 1e-9:
+                continue
+            electricity = float(evaluate(hp.get_expression("input"), idx=step))
+            if not isfinite(electricity) or electricity <= 0:
+                raise ValueError(f"{self.id}: operating {key} needs positive HP electricity for COP")
+            cop = heat / electricity
+            fixed = self.annual_fixed_cost_surcharge(key, float(hp["Qdot_out_nom"].value), hours)
+            electric_cost = price / cop
+            records.append({"component": key, "output_mw": heat, "hp_electricity_mw": electricity,
+                            "forecast_input_price": price, "efficiency_or_cop": cop,
+                            "variable_nonfuel_cost": variable, "fuel_or_electricity_cost": electric_cost,
+                            **fixed, "component_price": electric_cost + variable + fixed["fixed_surcharge"]})
+        total = sum(row["output_mw"] for row in records)
+        if total <= 1e-9 or export_volume > total + 1e-5:
+            raise ValueError(f"{self.id}: HT export cannot be priced from HP generation; inspect HT grid imports")
+        for row in records:
+            row["aggregation_weight"] = row["output_mw"] / total
+        return sum(row["component_price"] * row["aggregation_weight"] for row in records), records
+
+    def market_bid_blocks(self, start, market_config, net_import, pricing_config):
+        """Describe mandatory HPC and optional HP purchases under the existing policy."""
+        if not (
+            pricing_config and pricing_config.get("mandatory_hpc_at_market_max")
+            and market_config.market_id == "LLEC" and net_import > 0
+        ):
+            return super().market_bid_blocks(start, market_config, net_import, pricing_config)
+        hpc, hp = self.electricity_purchase_split(start, net_import)
+        return [
+            {"label": "hpc", "quantity_mw": hpc, "price_rule": "market_max",
+             "apply_price_limits": True, "pricing_rule": "mandatory_hpc_market_max"},
+            {"label": "hp", "quantity_mw": hp, "price_rule": "configured",
+             "apply_price_limits": True, "pricing_rule": "existing_hp_purchase_policy"},
+        ]
+
+    def electricity_purchase_split(self, start, net_import):
+        """Separate mandatory HPC electricity from the unchanged pre-clearing HP load."""
+        step = self.cost_recovery_timestep(start)
+        mandatory = sum(float(c["Electric_consumption"].value)
+                        for key, c in self.components.items() if key.startswith("hpc_"))
+        hp_power = sum(float(evaluate(c.get_expression("input"), idx=step))
+                       for key, c in self.components.items() if key.startswith("heat_pump_"))
+        if (not all(isfinite(value) for value in [mandatory, hp_power, net_import])
+                or mandatory <= 0 or hp_power < -1e-8
+                or abs(net_import - mandatory - hp_power) > 1e-5):
+            raise ValueError(f"{self.id}: LLEC net import does not match mandatory HPC plus HP electricity")
+        mandatory_bid = min(mandatory, net_import)
+        return mandatory_bid, max(0.0, net_import - mandatory_bid)
+    # intermediate calculation, and handling rejected/partially accepted bids.

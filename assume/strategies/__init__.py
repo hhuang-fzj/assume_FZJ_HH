@@ -21,6 +21,7 @@ from assume.strategies.flexable_storage import (
 )
 from assume.strategies.naive_strategies import (
     DsmEnergyOptimizationStrategy,
+    IntentBasedBiddingStrategy,
     EnergyNaiveProfileStrategy,
     DsmEnergyNaiveRedispatchStrategy,
     EnergyNaiveRedispatchStrategy,
@@ -87,6 +88,9 @@ bidding_strategies: dict[str, type[BaseStrategy | UnitOperatorStrategy]] = {
     "demand_energy_naive_redispatch": EnergyNaiveRedispatchStrategy,
     "household_energy_optimization": DsmEnergyOptimizationStrategy,
     "industry_energy_optimization": DsmEnergyOptimizationStrategy,
+    "intent_based_bidding": IntentBasedBiddingStrategy,
+    # Compatibility with existing scenario input files.
+    "dsm_multi_energy_optimization": IntentBasedBiddingStrategy,
     "household_energy_naive_redispatch": DsmEnergyNaiveRedispatchStrategy,
     "industry_energy_naive_redispatch": DsmEnergyNaiveRedispatchStrategy,
     "powerplant_energy_optimization_dmas": EnergyOptimizationDmasStrategy,

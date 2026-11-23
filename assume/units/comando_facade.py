@@ -15,6 +15,22 @@ from assume.common.gurobi_diagnoser import optimize_and_diagnose
 
 class ComandoFacade:
 
+    market_interfaces = {
+        "LLEC": ("grid_Electricity", "energy"),
+        "HTH": ("grid_HT_Heat", "ht_heat"),
+        "LTH": ("grid_LT_Heat", "lt_heat"),
+    }
+
+    def market_bid_blocks(self, start, market_config, net_import, pricing_config):
+        """Describe one unsplit planned position; subclasses may supply intentions.
+
+        Quantities are unsigned MW; the strategy derives direction from net_import.
+        price_rule is configured or market_max. Labeled blocks may request price
+        limits and a pricing_rule audit label; they also receive distinct bid IDs.
+        This hook describes the existing plan without modifying or solving it.
+        """
+        return [{"quantity_mw": abs(net_import), "price_rule": "configured"}]
+
     def __init__(self, components, comando_config=None, comando_config_path=None, **kwargs):
         super().__init__(**kwargs)
         self.comando_config_path = comando_config_path or "<unit parameters>"
@@ -22,6 +38,17 @@ class ComandoFacade:
         self.comando_config = deepcopy(comando_config)
         self.components = deepcopy(components or {})
         self.horizon_mode = 'full_horizon'
+        self.submitted_orders = []
+        self.accepted_commitments = []
+        self._clearing_rounds = {}
+        self._accepted_positions = {}
+        self._reconciled_values = {}
+        self._reconciliation_finalized = False
+        self._cost_recovery_cache = {}
+        self.cost_recovery_audit = []
+        self._dsm_result_buffers = {
+            "dsm_component_dispatch": [], "dsm_market_positions": [], "dsm_reconciliation": [],
+        }
 
     @staticmethod
     def validate_comando_config(config, path, unit_id):
@@ -121,6 +148,53 @@ class ComandoFacade:
         if parameter == "compensation" and settings.get("feedin_limit", 0) == 0:
             return
         data[self.parameter_name(component_key, parameter)] = series.as_pd_series()
+
+    def annual_fixed_cost_surcharge(self, key, rated_output, full_load_hours, allocation=1.0):
+        """Annual fixed O&M only; never infer costs from TAC or annualize capex here.
+
+        IESComponent defines fixed_costs = c_m * investment_cost. The existing
+        make_tac_objective uses this as its annual fixed-cost term, separately
+        from annuitized investment. Cache by expression, parameters and allocation.
+        """
+        component = self.components[key]
+        try:
+            expression = component.get_expression("fixed_costs")
+        except KeyError as exc:
+            raise ValueError(f"{self.id}: {key}: cost-recovery pricing requires fixed_costs [EUR/year]") from exc
+        if get_vars(expression):
+            raise ValueError(f"{self.id}: {key}: fixed_costs must be independent of operating/design decisions")
+        values = [rated_output, full_load_hours, allocation]
+        if (not np.isfinite(values).all() or rated_output <= 0 or full_load_hours <= 0
+                or not 0 <= allocation <= 1):
+            raise ValueError(f"{self.id}: {key}: invalid rated MW, annual full-load hours or cost allocation")
+        parameters = tuple(sorted((symbol.name, float(symbol.value)) for symbol in expression.free_symbols))
+        signature = (str(expression), parameters, float(rated_output), float(full_load_hours), float(allocation))
+        cache = self._cost_recovery_cache
+        cache_key = (key, float(rated_output), float(full_load_hours), float(allocation))
+        if cache.get(cache_key, {}).get("signature") != signature:
+            annual = float(evaluate(expression))
+            if not np.isfinite(annual) or annual < 0:
+                raise ValueError(f"{self.id}: {key}: fixed_costs must be finite nonnegative EUR/year")
+            cache[cache_key] = {"signature": signature, "annual_fixed_cost": annual,
+                          "fixed_cost_expression": str(expression),
+                          "fixed_cost_source": f"{component.label}.fixed_costs",
+                          "fixed_surcharge": allocation * annual / (rated_output * full_load_hours),
+                          "rated_output_mw": float(rated_output), "full_load_hours": float(full_load_hours),
+                          "allocation": float(allocation)}
+        return {name: value for name, value in cache[cache_key].items() if name != "signature"}
+
+    def cost_recovery_timestep(self, start):
+        index = self.index.as_datetimeindex()
+        step = index.get_indexer([start])[0]
+        if step < 0:
+            raise ValueError(f"{self.id}: cost-recovery price outside forecast horizon at {start}")
+        return int(step)
+
+    def required_cost_recovery_input(self, config, name):
+        value = config.get(name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value):
+            raise ValueError(f"{self.id}: configure explicit finite cost_recovery.{name}; missing costs are not zero")
+        return float(value)
 
     def setup_model(self, presolve=True):
         # Initialize the Pyomo model

@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 
+from math import ceil, floor, isfinite
+
 from assume.common.base import MinMaxStrategy, SupportsMinMax
 from assume.common.market_objects import MarketConfig, Order, Orderbook, Product
 
@@ -195,23 +197,291 @@ class DsmEnergyOptimizationStrategy(MinMaxStrategy):
             and the volume of the product. Dispatch the order to the market.
             """
             start = product[0]
-            price = 0
-            if market_config.market_id == 'LLEC':
-                volume = unit.opt_power_volume.at[start]
-                price = 50
-            elif market_config.market_id == 'HTH':
-                volume = unit.opt_HT_heat_volume.at[start]
-                price = 93.7
+
+            volume = unit.opt_power_requirement.at[start]
+
             bids.append(
                 {
                     "start_time": start,
                     "end_time": product[1],
                     "only_hours": product[2],
-                    "price": price,
+                    "price": 3000,
                     "volume": -volume,
                 }
             )
 
+        return bids
+
+
+class IntentBasedBiddingStrategy(MinMaxStrategy):
+    """Translate an optimized multi-energy plan into bids with distinct intentions.
+
+    Use configured directional prices or optional component-based cost-recovery
+    selling prices and surcharges. Units describe bid blocks and their pricing
+    intentions through market_bid_blocks(); this strategy resolves configured or
+    market-maximum prices, preserving the planned total quantity.
+
+    Reuse a full-horizon plan or refresh the unit's rolling optimization window.
+    Map positive internal imports to negative market orders and record submitted
+    positions and pricing audits. Price bounds and ticks apply to cost-recovery
+    offers and blocks requesting price limits.
+
+    The unit optimizes internal operation; this strategy translates its results
+    into bids without optimizing bid prices or jointly clearing energy products.
+    """
+
+    def __init__(self, *args, cost_recovery=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Existing bidding_strategy_params transport; opt-in per ASSUME unit ID.
+        self.cost_recovery = cost_recovery or {}
+        if not isinstance(self.cost_recovery, dict):
+            raise ValueError("cost_recovery must map unit IDs to pricing assumptions")
+
+    @staticmethod
+    def _cost_recovery_price_limits(price, market):
+        """Validate the price and align market bounds to the permitted tick grid."""
+        raw = float(price)
+        low, high = market.minimum_bid_price, market.maximum_bid_price
+        low = float(low) if low is not None else float("-inf")
+        high = float(high) if high is not None else float("inf")
+        tick = market.price_tick
+        if not isfinite(raw) or low > high:
+            raise ValueError(f"{market.market_id}: invalid cost-recovery price or market bounds")
+        if tick is not None:
+            tick = float(tick)
+            if not isfinite(tick) or tick <= 0:
+                raise ValueError(f"{market.market_id}: price_tick must be positive")
+            low = ceil(low / tick - 1e-12) * tick if isfinite(low) else low
+            high = floor(high / tick + 1e-12) * tick if isfinite(high) else high
+            if low > high:
+                raise ValueError(f"{market.market_id}: no price tick lies within market bounds")
+        return raw, low, high, tick
+
+    @classmethod
+    def bounded_cost_recovery_price(cls, price, market):
+        """Return EUR/MWh on the permitted tick grid; portfolio converts to ticks once."""
+        raw, low, high, tick = cls._cost_recovery_price_limits(price, market)
+        bounded = min(max(raw, low), high)
+        final = min(max(round(bounded / tick) * tick, low), high) if tick else bounded
+        return final, {"calculated_price": raw, "submitted_price": final,
+                       "price_clipped": bounded != raw, "price_tick_rounded": final != bounded,
+                       "submitted_tick_count": int(round(final / tick)) if tick else None}
+
+    @staticmethod
+    def _market_interface(unit, market_config):
+        """Resolve the solved position and verify the market's energy product."""
+        interfaces = {"LLEC": ("opt_power_volume", "energy"),
+                      "HTH": ("opt_HT_heat_volume", "ht_heat"),
+                      "LTH": ("opt_LT_heat_volume", "lt_heat")}
+        market_id = market_config.market_id
+        if market_id not in interfaces:
+            raise ValueError(f"Unit {unit.id}: unsupported DSM market {market_id!r}")
+        attribute, expected_product = interfaces[market_id]
+        if market_config.product_type != expected_product:
+            raise ValueError(f"Unit {unit.id}: market {market_id} requires product {expected_product!r}")
+        return attribute, expected_product
+
+    @staticmethod
+    def _validate_products(unit, market_config, product_tuples):
+        """Reject incompatible delivery intervals before starting optimization."""
+        # Validate every product before solving or returning a partial bid list.
+        for start, end, only_hours in product_tuples:
+            if (start not in unit.index or end - start != unit.index.freq
+                    or only_hours is not None):
+                raise ValueError(f"Unit {unit.id}, market {market_config.market_id}: product {start} to {end} is outside or incompatible with the optimization horizon")
+
+    @staticmethod
+    def _ensure_operating_plan(unit, first_delivery):
+        """Refresh a rolling window or reuse the existing full-horizon solution."""
+        if unit.horizon_mode == "rolling_horizon":
+            unit.forecaster.update(unit=unit)
+            changed = unit._check_and_reoptimize_rolling_window(first_delivery)
+            if not changed and unit.optimisation_counter == 0:
+                unit.determine_optimal_operation_with_flex()
+                unit.optimisation_counter = 1
+        elif unit.optimisation_counter == 0:
+            unit.determine_optimal_operation_with_flex()
+            unit.optimisation_counter = 1
+
+    @staticmethod
+    def _bid_prices(unit, market_config):
+        """Read directional prices, retaining the existing legacy DSM defaults."""
+        market_id = market_config.market_id
+        prices = market_config.param_dict.get("bid_prices", {}).get(unit.id)
+        if prices is None:
+            # Preserve the existing electricity/HT policy for legacy DSM units.
+            # BPJ and LT require explicit scenario inputs, never PPA prices.
+            legacy = {"LLEC": 158.5, "HTH": 93.7}
+            if market_id not in legacy or getattr(unit, "technology", None) == "energy_cell":
+                raise ValueError(f"Unit {unit.id}, market {market_id}: configure param_dict.bid_prices for buy/sell directions")
+            prices = {"buy": legacy[market_id], "sell": legacy[market_id]}
+        if not isinstance(prices, dict):
+            raise ValueError(f"Unit {unit.id}, market {market_id}: bid_prices must map buy/sell directions to prices")
+        return prices
+
+    def _cost_recovery_settings(self, unit):
+        """Validate optional component pricing and product-specific surcharges."""
+        rules = self.cost_recovery.get(unit.id)
+        if rules is not None and not isinstance(rules, dict):
+            raise ValueError(f"{unit.id}: cost_recovery assumptions must be a mapping")
+        adders = (rules or {}).get("selling_price_adders", {})
+        if not isinstance(adders, dict) or set(adders) - {"energy", "ht_heat"}:
+            raise ValueError(f"{unit.id}: selling_price_adders must map energy/ht_heat to EUR/MWh surcharges")
+        for product, adder in adders.items():
+            if (isinstance(adder, bool) or not isinstance(adder, (int, float))
+                    or not isfinite(adder) or adder < 0):
+                raise ValueError(f"{unit.id}: selling_price_adders.{product} must be finite nonnegative EUR/MWh")
+        return rules, adders
+
+    @staticmethod
+    def _solved_net_import(unit, market_config, attribute, start):
+        """Read one finite interface position in MW; imports are positive."""
+        market_id = market_config.market_id
+        position = getattr(unit, attribute)
+        if start not in position.index:
+            raise ValueError(f"Unit {unit.id}, market {market_id}: solved interface does not cover {start}")
+        net_import = float(position.at[start])
+        if not isfinite(net_import):
+            raise ValueError(f"Unit {unit.id}, market {market_id}: non-finite position at {start}")
+        return net_import
+
+    @staticmethod
+    def _directional_price(unit, market_config, prices, direction, start):
+        """Resolve a configured scalar or timestamped purchase/sale price."""
+        market_id = market_config.market_id
+        if direction not in prices:
+            raise ValueError(f"Unit {unit.id}, market {market_id}: unsupported {direction} direction; no bid price configured")
+        price = prices[direction]
+        if hasattr(price, "at"):
+            try:
+                price = price.at[start]
+            except (IndexError, KeyError) as exc:
+                raise ValueError(f"Unit {unit.id}, market {market_id}: no {direction} bid price at {start}") from exc
+        price = float(price)
+        if not isfinite(price):
+            raise ValueError(f"Unit {unit.id}, market {market_id}: invalid {direction} price")
+        return price
+
+    def _validate_bid_blocks(self, unit, market, blocks, net_import):
+        """Check the block contract before constructing any orders for an interval."""
+        context = f"Unit {unit.id}, market {market.market_id}"
+        if not isinstance(blocks, list) or not blocks:
+            raise ValueError(f"{context}: market_bid_blocks must return a nonempty list")
+        labels = set()
+        total = 0.0
+        for block in blocks:
+            if not isinstance(block, dict):
+                raise ValueError(f"{context}: each bid block must be a mapping")
+            quantity, label = block.get("quantity_mw"), block.get("label")
+            if (isinstance(quantity, bool) or not isinstance(quantity, (int, float))
+                    or not isfinite(quantity) or quantity < 0):
+                raise ValueError(f"{context}: block quantity_mw must be finite and nonnegative")
+            if label is not None and (not isinstance(label, str) or not label):
+                raise ValueError(f"{context}: bid block label must be a nonempty string")
+            if label in labels:
+                raise ValueError(f"{context}: duplicate bid block label {label!r}")
+            labels.add(label)
+            if (not isinstance(block.get("price_rule"), str)
+                    or block["price_rule"] not in {"configured", "market_max"}):
+                raise ValueError(f"{context}: unsupported bid block price_rule {block.get('price_rule')!r}")
+            total += quantity
+        if abs(total - abs(net_import)) > 1e-5:
+            raise ValueError(f"{context}: bid block quantities do not match the planned net position")
+
+    def _bid_block_orders(self, unit, market, product, net_import, configured_price, rules):
+        """Price unit-described intentions and build orders without equipment knowledge."""
+        start, end, only_hours = product
+        describe = getattr(unit, "market_bid_blocks", None)
+        # Preserve unsplit bids for units without the optional COMANDO hook.
+        blocks = describe(start, market, net_import, rules) if describe else [
+            {"quantity_mw": abs(net_import), "price_rule": "configured"}]
+        self._validate_bid_blocks(unit, market, blocks, net_import)
+        context = f"Unit {unit.id}, market {market.market_id}"
+        bids, audits = [], []
+        for block in blocks:
+            quantity = block["quantity_mw"]
+            if quantity <= 1e-9:
+                continue
+            raw = configured_price
+            if block["price_rule"] == "market_max":
+                raw = market.maximum_bid_price
+                if raw is None or not isfinite(float(raw)):
+                    raise ValueError(f"{context}: market_max block requires a configured maximum_bid_price")
+            adjustment = None
+            if block.get("apply_price_limits") or block["price_rule"] == "market_max":
+                price, adjustment = self.bounded_cost_recovery_price(raw, market)
+            else:
+                price = configured_price
+            bid = {"start_time": start, "end_time": end, "only_hours": only_hours,
+                   "price": price, "volume": -quantity if net_import > 0 else quantity}
+            if block.get("label") is not None:
+                bid["bid_id"] = f"{unit.id}_{start.isoformat()}_{block['label']}"
+            bids.append(bid)
+            if adjustment is not None:
+                audits.append({"datetime": start, "market_id": market.market_id,
+                               "product_type": market.product_type,
+                               "pricing_rule": block.get("pricing_rule", block["price_rule"]),
+                               "quantity_mw": quantity, **adjustment})
+        return bids, audits
+
+    def calculate_bids(
+        self,
+        unit: SupportsMinMax,
+        market_config: MarketConfig,
+        product_tuples: list[Product],
+        **kwargs,
+    ) -> Orderbook:
+        """Validate delivery products, obtain a plan, price its positions and record bids."""
+        attribute, expected_product = self._market_interface(unit, market_config)
+        if not product_tuples:
+            return []
+        self._validate_products(unit, market_config, product_tuples)
+        self._ensure_operating_plan(unit, product_tuples[0][0])
+        market_id = market_config.market_id
+        if not hasattr(unit, attribute):
+            raise ValueError(f"Unit {unit.id}, market {market_id}: missing solved interface {attribute}")
+        prices = self._bid_prices(unit, market_config)
+        rules, adders = self._cost_recovery_settings(unit)
+        bids = []
+        audits = []
+        for start, end, only_hours in product_tuples:
+            net_import = self._solved_net_import(unit, market_config, attribute, start)
+            if abs(net_import) <= 1e-9:  # Ignore numerical solver noise in MW.
+                continue
+            direction = "buy" if net_import > 0 else "sell"
+            technology = getattr(unit, "technology", None)
+            selling_rule = rules is not None and direction == "sell" and (
+                technology == "energy_hub" and expected_product in {"energy", "ht_heat"}
+                or technology == "waste_heat_recovery" and expected_product == "ht_heat"
+            )
+            if selling_rule:
+                base, components = unit.cost_recovery_selling_price(start, expected_product, -net_import, rules)
+                # A bidding surcharge, applied once after component aggregation;
+                # it does not enter the COMANDO dispatch objective or quantities.
+                adder = float(adders.get(expected_product, 0.0))
+                raw = base + adder
+                price, adjustment = self.bounded_cost_recovery_price(raw, market_config)
+                audits.append({"datetime": start, "market_id": market_id, "product_type": expected_product,
+                               "pricing_rule": "component_cost_recovery", "components": components,
+                               "base_cost_recovery_price": base, "selling_price_adder": adder, **adjustment})
+                bids.append({"start_time": start, "end_time": end, "only_hours": only_hours,
+                             "price": price, "volume": -net_import})
+                continue
+            price = self._directional_price(unit, market_config, prices, direction, start)
+            block_bids, block_audits = self._bid_block_orders(
+                unit, market_config, (start, end, only_hours), net_import, price, rules)
+            bids.extend(block_bids)
+            audits.extend(block_audits)
+        if hasattr(unit, "submitted_orders"):
+            planned = {}
+            for bid in bids:
+                unit.submitted_orders.append({**bid, "market_id": market_id,
+                                              "product_type": market_config.product_type})
+                planned[bid["start_time"]] = planned.get(bid["start_time"], 0.0) + bid["volume"]
+            for start, volume in planned.items():
+                unit.outputs[f"{market_config.product_type}_planned"].at[start] = volume
+        if audits:
+            unit.cost_recovery_audit.extend(audits)
         return bids
 
 

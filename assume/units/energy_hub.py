@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import logging
+from math import isfinite
 
 import pyomo.environ as pyo
 import pandas as pd
@@ -11,7 +12,7 @@ from assume.common.base import SupportsMinMax
 from assume.common.forecaster import EnergyHubForecaster
 from assume.units.comando_facade import ComandoFacade
 
-from comando.utility import make_tac_objective
+from comando.utility import evaluate, make_tac_objective
 from comando.interfaces.gurobi import to_gurobi
 
 logger = logging.getLogger(__name__)
@@ -140,4 +141,67 @@ class EnergyHub(ComandoFacade, SupportsMinMax):
                 timesteps= ts
             )
 
+        self.comando_problem = P
         return to_gurobi(P)
+
+    def cost_recovery_selling_price(self, start, product_type, export_volume, config):
+        """Reference-efficiency accounting prices, not optimized marginal costs.
+
+        Alpha allocates shared CHP fuel/fixed O&M once across the two outputs.
+        Gross generation weights include internally used heat (e.g. the AC).
+        Grid imports receive no CHP/boiler production-cost allocation. There is
+        no physical source-to-consumer attribution in this weighted average.
+        """
+        if export_volume <= 1e-9:
+            return None, []
+        if product_type not in {"energy", "ht_heat"}:
+            raise ValueError(f"{self.id}: unsupported cost-recovery product {product_type}")
+        if (config.get("gas_price_basis") not in {"LHV", "HHV"}
+                or config.get("gas_price_basis") != config.get("efficiency_basis")):
+            raise ValueError(f"{self.id}: gas-price and reference-efficiency heating-value bases must match")
+        alpha = self.required_cost_recovery_input(config, "alpha")
+        hours = self.required_cost_recovery_input(config, "full_load_hours")
+        if not 0 <= alpha <= 1:
+            raise ValueError(f"{self.id}: CHP alpha must lie between zero and one")
+        step = self.cost_recovery_timestep(start)
+        gas = float(self.natural_gas_price.at[start])
+        if not isfinite(gas):
+            raise ValueError(f"{self.id}: non-finite gas forecast at {start}")
+        records = []
+        for key, component in self.components.items():
+            if key.startswith("chp_"):
+                if product_type == "energy":
+                    efficiency, share, output = component.eff_el_nom, alpha, "output"
+                    variable_key = "chp_variable_nonfuel_cost_el"
+                else:
+                    efficiency, share, output = component.eff_th_nom, 1 - alpha, "heat_output"
+                    variable_key = "chp_variable_nonfuel_cost_heat"
+                rated_el = float(component["P_el_out_nom"].value)
+                rated = rated_el if product_type == "energy" else rated_el * component.eff_th_nom / component.eff_el_nom
+            elif key.startswith("boiler_") and product_type == "ht_heat":
+                efficiency, share, output = component.kwargs["thermal_efficiency"], 1.0, "output"
+                rated = float(component["Qdot_out_nom"].value)
+                variable_key = "boiler_variable_nonfuel_cost_heat"
+            else:
+                continue
+            generation = float(evaluate(component.get_expression(output), idx=step))
+            if not isfinite(generation) or generation < -1e-8:
+                raise ValueError(f"{self.id}: invalid {key} generation at {start}")
+            if generation <= 1e-9:
+                continue
+            if not isfinite(efficiency) or efficiency <= 0:
+                raise ValueError(f"{self.id}: {key}: reference efficiency must be positive")
+            variable = self.required_cost_recovery_input(config, variable_key)
+            fixed = self.annual_fixed_cost_surcharge(key, rated, hours, share)
+            fuel = share * gas / efficiency
+            records.append({"component": key, "output_mw": generation, "forecast_input_price": gas,
+                            "efficiency_or_cop": float(efficiency), "alpha": alpha if key.startswith("chp_") else None,
+                            "heating_value_basis": config["gas_price_basis"],
+                            "variable_nonfuel_cost": variable, "fuel_or_electricity_cost": fuel,
+                            **fixed, "component_price": fuel + variable + fixed["fixed_surcharge"]})
+        total = sum(row["output_mw"] for row in records)
+        if total <= 1e-9 or export_volume > total + 1e-5:
+            raise ValueError(f"{self.id}: {product_type} export cannot be priced from producing CHP/boiler components; inspect grid imports")
+        for row in records:
+            row["aggregation_weight"] = row["output_mw"] / total
+        return sum(row["component_price"] * row["aggregation_weight"] for row in records), records
