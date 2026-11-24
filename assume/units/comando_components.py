@@ -6,6 +6,7 @@ from comando.core import Component, BINARY, INTEGER
 from assume.common.utils import create_pwlm
 
 import comando
+import numpy as np
 
 
 class IESComponent(Component):
@@ -549,14 +550,22 @@ class CompressionChiller(IESComponent):
             label,
             exists=True,
             optional=False,
+            network_coupled=True,
+
             **kwargs,
     ):
-        super().__init__(label, kwargs['max_power'], kwargs['c_ref'], kwargs['c_m'], M=kwargs['cost_exponent'],
+        self.c_ref = kwargs.get('c_ref', 0) * kwargs.get('max_power', 0)
+        super().__init__(label, kwargs['max_power'], self.c_ref, kwargs['c_m'], M=kwargs['cost_exponent'],
                          nom_min=kwargs['min_power'], nom_max=kwargs['max_power'],
                          min_part_load=kwargs['min_part_load'], base_eff=kwargs['thermal_efficiency'],
                          fit_params_nom=self.fit_params_nom, in_name='P_in',
                          out_name='Qdot_out', exists=exists, optional=optional)
         self.kwargs = kwargs
+
+        if network_coupled:
+            inp = self.get_expression('input')
+            out = self.get_expression('output')
+            self.add_input('Qdot_reject', inp + out)
 
 class Demand(Component):
     """
@@ -581,10 +590,13 @@ class Demand(Component):
         self.add_input('IN', demand)
 
 class Source(Component):
-    """ Simple Source component for the Jupiter computer
-        with a maximum Qdot of 11 MW. Very simplified model
-        which is based on the assumption that Jupiter is operating
-        at full load and need always 13 MW of electricity.
+    """Simplified HPC with fixed electricity and selectable recovered LT heat.
+
+        max_power supplies the constant electrical consumption [MW]. min_power
+        supplies the available LT heat limit [MW]. q_dot is heat admitted to the
+        LT bus after implicit free disposal, not total waste-heat generation.
+        In LLEC_BPJ these inputs are 13 MW electricity and 11 MW available heat.
+        Compensated LT feed-in is a planned sale, not the disposal mechanism.
 
         ---------
         design variables: none
@@ -595,12 +607,12 @@ class Source(Component):
 
     def __init__(self, label,**kwargs,):
         super().__init__(label=label)
-        self.Q_dot_max = kwargs['max_power']
+        self.Q_dot_max = kwargs['min_power']
         self.make_parameter('T_out', value=None)
         self.make_parameter('T_in', value=None)
-        self.make_parameter('Electric_consumption', value=kwargs['min_power'])#ToDo: add the tag elc_consumption
+        self.make_parameter('Electric_consumption', value=kwargs['max_power'])
         self.make_operational_variable(name="q_dot", bounds=(0, None))
-        self.add_le_constraint(self["q_dot"],self.Q_dot_max)#ToDo: Check the relation heat_output & Elec_consumption
+        self.add_le_constraint(self["q_dot"],self.Q_dot_max)
         self.add_output('HEAT_OUT', self["q_dot"])
         self.add_input('EL_IN', self['Electric_consumption'])
 
@@ -638,8 +650,8 @@ class HeatPump(IESComponent):
                  use_lorenz=False,
                  **kwargs,):
 
-        C_d = kwargs["C_d"]
-        C_c = kwargs["C_c"]
+        C_d = kwargs.get("C_d",0)
+        C_c = kwargs.get("C_c",0)
         T_con_out = kwargs["T_con_in"]
         T_eva_out = kwargs["T_eva_out"]
         eff_exer = kwargs["eff_COP"]
@@ -738,6 +750,245 @@ class HeatPump(IESComponent):
                 elif not con_comando:
                     print(f'constraint {name_con} is always violated')
 
+class Battery(Component):
+
+    def __init__(self, label,
+                  **kwargs,):
+        super().__init__(label)
+
+        soc_init = kwargs.get('soc_init', 0.0)
+        P_nom = kwargs.get('max_power', 0.1)
+        self.capacity = kwargs.get('max_capacity', 0.5)  # MWh
+        self.max_el_in = P_nom   # MW
+        self.max_el_out = P_nom  # MW
+        self.initial_soc = soc_init * self.capacity
+        self.c_loss = kwargs.get('storage_loss_rate', 0)
+        self.charge_eff = kwargs.get('efficiency', 1)  # [-]
+        self.discharge_eff = kwargs.get('discharge_efficiency', 1)
+        self.c_ref = kwargs["c_ref"]
+        self.c_m = kwargs["c_m"]
+        self.M = kwargs["cost_exponent"]
+
+
+        el_in = self.make_operational_variable("el_in", bounds=(0, self.max_el_in))
+        el_out = self.make_operational_variable("el_out", bounds=(0,  self.max_el_out))
+        b_op = self.make_operational_variable("b_op", domain=BINARY, bounds=(0, 1))
+
+        self.add_le_constraint(el_in, b_op * self.max_el_in)
+        self.add_le_constraint(el_out, (1 - b_op) * self.max_el_out)
+
+        soc = self.make_operational_variable('soc', bounds=(0, self.capacity))
+        dissipation = self.add_expression('dissipation', soc * self.c_loss)
+        state_change = el_in * self.charge_eff - el_out / self.discharge_eff - dissipation
+        self.declare_state(soc, state_change, init_state=self.initial_soc)
+
+        investment_costs = self.c_ref * (self.capacity / 0.001) ** self.M #c_ref is EUR/kWh at this size
+        # fixed cost of the component
+        fixed_costs = self.c_m * investment_costs
+
+        self.add_expression('investment_costs', investment_costs)
+        self.add_expression('fixed_costs', fixed_costs)
+
+        self.add_input('EL_IN', el_in)
+        self.add_output('EL_OUT', el_out)
+
+class Source_RE(Component):
+    """ Simple Source component for the RE generators
+        ---------
+        design variables: none
+        parameter: electricity production profile 'el_prod'
+        operational variable: 'curtailed'
+        costs: optional flat price per unit of commodity
+        """
+    def __init__(self, label, **kwargs,):
+        super().__init__(label=label)
+
+        self.price = kwargs.get('price', 0)
+        self.contracted_annual_mwh = kwargs.get('contracted_annual_mwh', None)
+
+        el_prod = self.make_parameter('el_prod')
+        el_out = self.make_operational_variable('el_out', bounds=(0, None))
+        curtailed = self.make_operational_variable('curtailed', bounds=(0, None))
+        self.add_eq_constraint(el_out + curtailed, el_prod, 'RE_balance')
+        self.add_output('OUT', el_out)
+
+        price = self.make_parameter('price', self.price)
+        if self.contracted_annual_mwh is not None:
+            self.add_expression('fixed_costs', price * self.contracted_annual_mwh)
+        else:
+            self.add_expression('variable_costs', price * el_out)
+
+class ReversibleAirWaterHeatPump(Component):
+    """Fleet of reversible air-water heat pumps with fixed COP/EER figures.
+
+    """
+
+    def __init__(self, label, **kwargs,):
+        super().__init__(label)
+
+        Q_heat_max = kwargs.get('max_power', 5)
+        cop_heat = kwargs.get('eff_COP', 3)
+        eer_cool = kwargs.get('cool_cop', 3)
+        self.c_ref_per_MW = kwargs.get('c_ref')# [€/MW_th], same basis as HeatPump (Pieper et al.)
+        self.c_m = kwargs.get('c_m')# [-], maintenance coefficient (fraction of investment cost)
+        P_el_nom = Q_heat_max / cop_heat
+        Q_cool_max = eer_cool * P_el_nom
+
+        P_el_heat = self.make_operational_variable('P_el_heat', bounds=(0, P_el_nom))
+        P_el_cool = self.make_operational_variable('P_el_cool', bounds=(0, P_el_nom))
+        self.add_le_constraint(P_el_heat + P_el_cool, P_el_nom, 'shared_compressor_capacity')
+
+        Qdot_heat = cop_heat * P_el_heat
+        Qdot_cool = eer_cool * P_el_cool
+        self.add_expression('Qdot_heat', Qdot_heat)
+        self.add_expression('Qdot_cool', Qdot_cool)
+
+        investment_costs = self.c_ref_per_MW * Q_heat_max
+        self.add_expression('investment_costs', investment_costs)
+        self.add_expression('fixed_costs', self.c_m * investment_costs)
+
+        self.add_input('P_IN', P_el_heat + P_el_cool)
+        self.add_output('Qdot_heat_out', Qdot_heat)
+        self.add_output('Qdot_cool_out', Qdot_cool)
+
+class CombinedThermalStorage(Component):
+    # efficiencies -- ASSUMPTION 2 above
+    charge_eff = 0.95
+    discharge_eff = 0.95
+    # operational parameters -- ASSUMPTION 4 above
+    in_min = 0
+    in_max = 1
+    out_min = 0
+    out_max = 1
+    # physical properties of water
+    rho = 1000  # [kg/m^3]
+    cp = 4186  # [J/kg/K]
+
+    def __init__(self, label, eta_tc=0.8,
+                 **kwargs,):
+        """
+        Arguments
+        ---------
+        The fixed max_capacity determines effective water volume [m^3].
+        dT_cool: cooling-duty temperature spread [K] (narrower than dT_heat)
+        HD_ratio: height-to-diameter ratio [-]
+        K: overall wall heat transfer coefficient [W/m^2/K]
+        eta_tc: thermocline efficiency, usable capacity fraction [-]
+        cyclic: whether the SOC must return to its start-of-period value
+        tes_T_flow, tes_T_return: fixed scalar temperatures in
+            a common temperature scale. Their difference is in Kelvin.
+        max_capacity: authoritative usable heat energy [MWh].
+        soc_init: initial fraction of usable energy; zero is not 0 K.
+        """
+
+        super().__init__(label)
+        # cost parameters (Sass2020 basis, same as HotWaterStorage)
+        self.c_ref = kwargs.get("c_ref")# [EUR], reference cost (83.8 EUR/kWh at reference size)
+        self.M = kwargs.get("cost_exponent")# [-], cost exponent
+        self.c_m = kwargs.get("c_m") # [-], maintenance coefficient (fraction of investment cost)
+        dT_cool = kwargs.get("dt_cool", 10)
+        HD_ratio = kwargs.get("hd_ratio", 2)
+        K = kwargs.get("k", 0.5)
+        cyclic = kwargs.get("cyclic", True)
+        if isinstance(cyclic, str):
+            if cyclic.lower() not in {"true", "false"}:
+                raise ValueError(f"{label}: cyclic must be true or false")
+            cyclic = cyclic.lower() == "true"
+        self.cyclic = cyclic
+        self.charge_eff = kwargs.get("efficiency", type(self).charge_eff)
+        self.discharge_eff = kwargs.get("discharge_efficiency", type(self).discharge_eff)
+        # Fixed operating temperatures; only their difference sets usable energy.
+        T_flow = kwargs.get("tes_T_flow", 10)
+        T_return = kwargs.get("tes_T_return", 5)
+        dT_heat = T_flow - T_return
+        cap = kwargs["max_capacity"]  # MWh of usable thermal energy
+        if (not all(np.isfinite(value) for value in [cap, dT_heat, dT_cool, eta_tc, HD_ratio, K])
+                or cap <= 0 or dT_heat <= 0 or dT_cool <= 0
+                or not 0 < eta_tc <= 1 or HD_ratio <= 0 or K < 0):
+            raise ValueError(f"{label}: invalid capacity, temperature spreads, efficiency or tank geometry")
+        # Capacity is fixed by the input; volume is a derived geometry, not a
+        # design decision or an independent, potentially inconsistent default.
+        volume = cap * 3.6e9 / (eta_tc * self.rho * self.cp * dT_heat)
+        self.capacity = cap
+        self.volume = volume
+        dT_heat_max = dT_heat
+        max_cap = cap
+        cool_ratio = dT_cool / dT_heat_max
+        max_cap_cool = max_cap * cool_ratio
+        D = (4 * volume / (np.pi * HD_ratio)) ** (1 / 3)
+        c_loss = 4 * K * 3600 / (self.rho * self.cp * D)
+
+        # The same fixed usable capacity sets investment cost and SOC bounds.
+        investment_costs = self.c_ref * (cap / 0.001) ** self.M # [MWh], reference nominal capacity (= 1 kWh)
+        self.add_expression('investment_costs', investment_costs)
+        self.add_expression('fixed_costs', self.c_m * investment_costs)
+
+        soc_heat = self.make_operational_variable('soc_heat', bounds=(0, max_cap))
+
+        Qdot_in_heat = self.make_operational_variable('Qdot_in_heat', bounds=(0, max_cap))
+        b_in_heat = self.make_operational_variable('b_in_heat', domain=BINARY, init_val=0)
+        self.add_le_constraint(Qdot_in_heat, b_in_heat * max_cap * self.in_max,
+                               name='input_heat_max_switch')
+        self.add_le_constraint(Qdot_in_heat, cap * self.in_max, name='input_heat_max')
+        self.add_ge_constraint(Qdot_in_heat, b_in_heat * cap * self.in_min,
+                               name='input_heat_min')
+
+        Qdot_out_heat = self.make_operational_variable('Qdot_out_heat', bounds=(0, max_cap))
+        b_out_heat = self.make_operational_variable('b_out_heat', domain=BINARY, init_val=1)
+        self.add_le_constraint(Qdot_out_heat, b_out_heat * max_cap * self.out_max,
+                               name='output_heat_max_switch')
+        self.add_le_constraint(Qdot_out_heat, cap * self.out_max, name='output_heat_max')
+        self.add_ge_constraint(Qdot_out_heat, b_out_heat * cap * self.out_min,
+                               name='output_heat_min')
+
+        dissipation_heat = self.add_expression('dissipation_heat', soc_heat * c_loss)
+        state_change_heat = (Qdot_in_heat * self.charge_eff
+                             - Qdot_out_heat / self.discharge_eff
+                             - dissipation_heat)
+        self.declare_state(soc_heat, state_change_heat,
+                           float('nan') if cyclic else 0)
+
+        self.add_le_constraint(b_in_heat + b_out_heat, 1,
+                               name='charge_discharge_switch_heat')
+
+        # ============== cool duty ==============
+        soc_cool = self.make_operational_variable('soc_cool', bounds=(0, max_cap_cool))
+        self.add_le_constraint(soc_heat + soc_cool / cool_ratio,
+                               cap, name='joint_occupancy_max')
+
+        Qdot_in_cool = self.make_operational_variable('Qdot_in_cool', bounds=(0, max_cap_cool))
+        b_in_cool = self.make_operational_variable('b_in_cool', domain=BINARY, init_val=0)
+        self.add_le_constraint(Qdot_in_cool, b_in_cool * max_cap_cool * self.in_max,
+                               name='input_cool_max_switch')
+        self.add_le_constraint(Qdot_in_cool, cap * cool_ratio * self.in_max,
+                               name='input_cool_max')
+        self.add_ge_constraint(Qdot_in_cool, b_in_cool * cap * cool_ratio * self.in_min,
+                               name='input_cool_min')
+
+        Qdot_out_cool = self.make_operational_variable('Qdot_out_cool', bounds=(0, max_cap_cool))
+        b_out_cool = self.make_operational_variable('b_out_cool', domain=BINARY, init_val=1)
+        self.add_le_constraint(Qdot_out_cool, b_out_cool * max_cap_cool * self.out_max,
+                               name='output_cool_max_switch')
+        self.add_le_constraint(Qdot_out_cool, cap * cool_ratio * self.out_max,
+                               name='output_cool_max')
+        self.add_ge_constraint(Qdot_out_cool, b_out_cool * cap * cool_ratio * self.out_min,
+                               name='output_cool_min')
+
+        dissipation_cool = self.add_expression('dissipation_cool', soc_cool * c_loss)
+        state_change_cool = (Qdot_in_cool * self.charge_eff
+                             - Qdot_out_cool / self.discharge_eff
+                             - dissipation_cool)
+        self.declare_state(soc_cool, state_change_cool,
+                           float('nan') if cyclic else 0)
+
+        self.add_le_constraint(b_in_cool + b_out_cool, 1,
+                               name='charge_discharge_switch_cool')
+
+        self.add_input('IN_heat', Qdot_in_heat)
+        self.add_output('OUT_heat', Qdot_out_heat)
+        self.add_input('IN_cool', Qdot_in_cool)
+        self.add_output('OUT_cool', Qdot_out_cool)
+
 comando_dst : dict = {
     "chp" : CombinedHeatAndPower,
     "boiler" : Boiler,
@@ -747,4 +998,8 @@ comando_dst : dict = {
     "demand": Demand,
     "hpc" : Source,
     "heat_pump" : HeatPump,
+    "battery": Battery,
+    "res": Source_RE,
+    "rawhp": ReversibleAirWaterHeatPump,
+    "tes": CombinedThermalStorage,
 }
